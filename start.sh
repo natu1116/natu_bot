@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Botのメインスクリプトを実行
-python3 bot.py
+python3 natu_bot.py
 
 # 注意:
 # 1. 多くのLinux環境では 'python' よりも 'python3' コマンドが推奨されます。
