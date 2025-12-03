@@ -3,75 +3,86 @@ from discord.ext import commands
 import os
 from dotenv import load_dotenv
 import asyncio
-from aiohttp import web # 💡 aiohttpのWebモジュールをインポート
+from aiohttp import web # Webサーバー構築のためにaiohttpをインポート
 
-# 環境変数を読み込む (.envファイルから)
+# 環境変数を読み込む (.envファイルからTOKENを取得)
 load_dotenv() 
 
 # --- 設定 ---
+# 権限を持つロールID (リアクションを付けることができるユーザーのロール)
 AUTH_ROLE_ID = 1432204508536111155 
+# 付与するロールID (コメントをしたユーザーに付与されるロール)
 GRANT_ROLE_ID = 1432204383529078935
+# 監視するリアクション絵文字
 TARGET_EMOJI = '✅'
 
 # --- Discord Botの設定 ---
 intents = discord.Intents.default()
+# メンバー情報とメッセージ内容のインテントを有効化 (ロール付与に必須)
 intents.members = True 
 intents.message_content = True 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# --- 💡 Webサーバー機能（ポートチェック回避用） ---
+# --- Webサーバー機能（ポートチェック回避用） ---
+
 async def handle_health_check(request):
     """
-    Renderなどのホスティングサービスのヘルスチェックに応答するためのハンドラ。
-    応答メッセージを最小限の固定テキストに保ちます (ログや出力サイズ超過エラー対策)。
+    ホスティングサービスのヘルスチェックに応答するためのハンドラ。
+    Botの稼働状況を確認し、応答を返します。
     """
-    # Botが準備完了状態（オンライン）か確認
     if bot.is_ready():
-        # ステータス200 (OK) を返し、Botが稼働中であることを通知
+        # Botが稼働中であれば200 OK
         return web.Response(text="OK", content_type='text/plain', status=200)
     else:
-        # 準備中でなければステータス503 (Service Unavailable) を返す
+        # Botがまだ初期化中であれば503 Service Unavailable
         return web.Response(text="Bot is initializing...", content_type='text/plain', status=503)
 
-async def web_server():
+async def web_server_start():
     """
-    Webサーバーを非同期で起動し、ヘルスチェックのエンドポイントを設定します。
+    Webサーバーを非同期で起動します。Discord Botと同じイベントループで実行されます。
     """
-    # 環境変数 'PORT' からポート番号を取得。設定されていない場合は10000をデフォルトとして使用。
-    port = int(os.environ.get("PORT", 10000))
+    # 環境変数 'PORT' からポート番号を取得 (ホスティングサービスで必須)
+    port = int(os.environ.get("PORT", 8080))
     
     app = web.Application()
-    
     # ルート ('/') に対してヘルスチェックハンドラを登録
     app.router.add_get("/", handle_health_check)
     
     runner = web.AppRunner(app)
     await runner.setup()
     
-    # 0.0.0.0で指定されたポートをリッスン
+    # 0.0.0.0と指定されたポートでリッスンを開始
     site = web.TCPSite(runner, host='0.0.0.0', port=port)
     
     try:
         await site.start()
-        print(f"Web server started on http://0.0.0.0:{port}/")
+        print(f"✅ Web server started successfully on port {port} (for health check).")
     except Exception as e:
-        # 起動失敗は致命的なエラーとしてログに出力
-        print(f"FATAL ERROR: Webサーバーの起動に失敗しました。{e}")
+        # 起動失敗は致命的なエラー
+        print(f"🚨 FATAL ERROR: Webサーバーの起動に失敗しました。{e}")
+
 
 # --- Discord Bot イベントリスナー ---
+
 @bot.event
 async def on_ready():
-    """BotがDiscordに接続したときに実行されます"""
+    """
+    BotがDiscordに接続し、準備が完了したときに実行されます。
+    この非同期ループ上でWebサーバーのタスクをスケジュールします。
+    """
     print('-------------------------------------')
     print(f'Botがログインしました: {bot.user}')
-    # Webサーバーの起動ログは、web_server関数内ですでに出力されます
     print('-------------------------------------')
+    
+    # Botのイベントループ上でWebサーバーのタスクをスケジュール
+    asyncio.create_task(web_server_start())
+
 
 @bot.event
 async def on_raw_reaction_add(payload):
-    """リアクションが追加されたときに実行されます"""
+    """リアクションが追加されたときに実行されます (ロール付与ロジック)"""
 
-    # 1. リアクションがBot自身のものではないかを確認
+    # 1. Bot自身によるリアクションは無視
     if payload.user_id == bot.user.id:
         return
 
@@ -91,9 +102,8 @@ async def on_raw_reaction_add(payload):
     if reactor_member is None:
         return
 
-    # 4. リアクターが特定のロールを持っているかを確認
+    # 4. リアクターが権限ロールを持っているかを確認
     auth_role = discord.utils.get(guild.roles, id=AUTH_ROLE_ID)
-    
     if auth_role is None or auth_role not in reactor_member.roles:
         return
 
@@ -114,6 +124,7 @@ async def on_raw_reaction_add(payload):
     # 6. コメントをしたユーザー（ターゲット）を取得
     target_user = message.author
     
+    # Botのコメントや不明なユーザーは無視
     if target_user.bot or target_user is None:
         return
 
@@ -128,6 +139,7 @@ async def on_raw_reaction_add(payload):
     try:
         target_member = guild.get_member(target_user.id)
         
+        # 既にロールを持っているかチェック
         if grant_role in target_member.roles:
             print(f"ロール {grant_role.name} は既に {target_member.display_name} に付与されています。")
             return
@@ -143,21 +155,14 @@ async def on_raw_reaction_add(payload):
 
 # --- メイン実行ブロック ---
 if __name__ == '__main__':
+    # 環境変数 'TOKEN' からトークンを取得
     BOT_TOKEN = os.getenv('TOKEN') 
     
     if not BOT_TOKEN:
         print("⚠️ エラー: 環境変数 'TOKEN' が設定されていません。'.env'ファイルを確認してください。")
     else:
-        # WebサーバーとDiscord Botのタスクを並行して実行
         try:
-            # Botのイベントループを取得
-            loop = asyncio.get_event_loop()
-            
-            # 1. Webサーバータスクをスケジュール
-            loop.create_task(web_server())
-            
-            # 2. Botを実行 (この run() はブロッキングメソッドで、ループが停止するまで実行されます)
+            # bot.run() を実行すると、その内部で非同期ループが起動し、on_readyイベントがトリガーされます。
             bot.run(BOT_TOKEN)
-            
         except Exception as e:
             print(f"致命的なエラーが発生しました: {e}")
