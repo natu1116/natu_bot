@@ -23,10 +23,29 @@ CHAT_TRIGGER_PREFIX = 'ボット、'
 
 # プレゼンス通知を送信するチャンネルID
 NOTIFICATION_CHANNEL_ID = 1445953441141882973 
+from datetime import datetime, timezone, timedelta
 
+def get_current_time_jst() -> str:
+    """
+    現在のリアルタイムの日本標準時 (JST) を取得し、フォーマットされた文字列で返します。
+    """
+    # 1. JST (UTC+9時間) のタイムゾーンオブジェクトを定義
+    JST = timezone(timedelta(hours=+9), 'JST')
+
+    # 2. 現在のUTC時刻を取得し、JSTに変換
+    now_jst = datetime.now(timezone.utc).astimezone(JST)
+
+    # 3. 時刻を読みやすい形式にフォーマット
+    # 例: 2025年12月4日 (木) 12時45分30秒 JST
+    formatted_time = now_jst.strftime(
+        "%H時%M分%S秒 %Z"
+    )
+
+    # 4. 応答文字列を生成
+    response_message = f"現在のサーバー時間は、{formatted_time} です。"
 # 💡 キーワード応答設定 
 KEYWORD_RESPONSES = {
-    "時間": "現在のサーバー時間は、日本標準時 (JST) です。",
+    "時間": "現在のサーバー時間は、{formatted_time} です。",
     "ありがとう": "どういたしまして！お役に立てて嬉しいです。",
     "さよなら": "またね！良い一日を！"
 }
