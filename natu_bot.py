@@ -1,131 +1,141 @@
-import asyncio
 import os
-import json
-import aiohttp
-from aiohttp import web
-import aiohttp_cors 
+import discord
+from discord.ext import commands # commands.Botを使う
+import asyncio
 
-# Google GenAI SDK
+# Gemini APIクライアント
 from google import genai
 from google.genai.errors import APIError
 
 # --- 環境設定 ---
-# Renderの環境変数からAPIキーを取得
+# 環境変数からトークンとAPIキーを取得
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+if not DISCORD_TOKEN:
+    print("FATAL: DISCORD_TOKEN が環境変数に設定されていません。Botは起動できません。")
 if not GEMINI_API_KEY:
     print("FATAL: GEMINI_API_KEY が環境変数に設定されていません。Gemini APIは動作しません。")
 
-# Geminiクライアントの初期化 (APIキーは自動で環境変数から読み込まれます)
+
+# Botの設定 (Intentsの設定が必要)
+intents = discord.Intents.default()
+intents.message_content = True # メッセージの内容を読み取る権限を有効にする
+
+# commands.Botとしてクライアントを初期化
+# command_prefixはスラッシュコマンドを使う場合は特に重要ではありませんが、設定しておきます。
+bot = commands.Bot(command_prefix='!', intents=intents)
+
 try:
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEYが設定されていません。")
+        
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    print("Gemini Client の初期化に成功しました。")
+
 except Exception as e:
-    # APIキーが空の場合などに発生。ログに出力するのみ。
     print(f"Gemini Clientの初期化中にエラーが発生しました: {e}")
-    client = None
-
+    gemini_client = None
 
 # ----------------------------------------------------------------------
-# 1. API呼び出しハンドラーの定義
+# Discordイベントハンドラー
 # ----------------------------------------------------------------------
 
-async def handle_gemini_request(request):
-    """
-    POSTリクエストを受け取り、Geminiモデルに問い合わせて応答を返します。
-    """
-    if not client:
-        return web.json_response({
-            "error": "Gemini APIクライアントが初期化されていません。APIキーを確認してください。"
-        }, status=500)
-
+@bot.event
+async def on_ready():
+    """BotがDiscordに接続したときに実行されます。"""
+    print(f'Logged in as {bot.user} (ID: {bot.user.id})')
+    
+    # スラッシュコマンドをDiscordサーバーに同期します
     try:
-        # リクエストからJSONボディを読み込み、ユーザーのプロンプトを取得
-        data = await request.json()
-        prompt = data.get("prompt", "なぜ空は青いのですか？") 
+        synced = await bot.tree.sync()
+        print(f"{len(synced)}個のコマンドを同期しました。")
+    except Exception as e:
+        print(f"コマンドの同期中にエラーが発生しました: {e}")
+        
+    print('------')
 
-        print(f"Geminiに問い合わせ中: {prompt[:30]}...")
+# ----------------------------------------------------------------------
+# スラッシュコマンド /ai の定義
+# ----------------------------------------------------------------------
 
-        # --- Gemini APIの呼び出し ---
-        response = client.models.generate_content(
+@bot.tree.command(name="ai", description="Gemini AIに質問を送信します。")
+@discord.app_commands.describe(
+    prompt="AIに話したい内容、または質問を入力してください。"
+)
+async def ai_command(interaction: discord.Interaction, prompt: str):
+    """
+    /ai [prompt] で呼び出され、Gemini APIの応答を返すコマンド。
+    """
+    if not gemini_client:
+        await interaction.response.send_message(
+            "❌ Gemini APIが初期化されていません。管理者にご連絡ください。", 
+            ephemeral=True # ephemeral=True は、メッセージをコマンド実行者のみに表示します
+        )
+        return
+
+    # 応答生成中の通知を送信（Discordに即座に応答する必要があります）
+    # `thinking` ステータスを表示
+    await interaction.response.defer()
+    
+    try:
+        # 質問内容
+        user_prompt = f"ユーザーからの質問/要求：{prompt}"
+        
+        # 1. Gemini APIの呼び出し
+        response = gemini_client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=[prompt]
+            contents=[user_prompt]
         )
         
-        # 応答テキストを抽出
+        # 2. 回答テキストを抽出
         gemini_text = response.text.strip()
+        
+        # 3. Discordに回答を送信 (編集して表示)
+        
+        # 応答が2000文字を超える場合は分割
+        if len(gemini_text) > 2000:
+            # 最初の2000文字を送信
+            await interaction.followup.send(
+                f"**質問:** {prompt}\n\n**AI応答 (1/2):**\n{gemini_text[:1900]}..."
+            )
+            # 残りの部分を送信
+            remaining_text = gemini_text[1900:]
+            await interaction.channel.send(f"**AI応答 (2/2):**\n...{remaining_text}")
+        else:
+            # 応答を編集し、回答を表示
+            await interaction.followup.send(
+                f"**質問:** {prompt}\n\n**AI応答:**\n{gemini_text}"
+            )
 
-        # 成功応答を返す
-        return web.json_response({
-            "prompt": prompt,
-            "response": gemini_text,
-            "model": response.model
-        })
 
-    except json.JSONDecodeError:
-        return web.json_response({"error": "無効なJSON形式です。"}, status=400)
     except APIError as e:
         print(f"Gemini APIエラー: {e}")
-        return web.json_response({"error": f"Gemini APIでの処理中にエラーが発生しました: {e}"}, status=503)
+        await interaction.followup.send(
+            "❌ Gemini APIの呼び出し中にエラーが発生しました。時間を置いて再度お試しください。",
+            ephemeral=True
+        )
     except Exception as e:
         print(f"予期せぬエラー: {e}")
-        return web.json_response({"error": f"サーバーエラー: {e}"}, status=500)
-
-
-# ----------------------------------------------------------------------
-# 2. WebサーバーのセットアップとCORSの適用
-# ----------------------------------------------------------------------
-
-async def handle_ping(request):
-    """ヘルスチェック用のルート"""
-    return web.Response(text="Bot is running and ready for Gemini requests.")
-
-def setup_web_server():
-    """
-    Webサーバーを設定し、CORSを適用する関数。
-    """
-    app = web.Application()
-    
-    # ヘルスチェックルート
-    app.router.add_get('/', handle_ping)
-    
-    # Gemini API呼び出し用のルート
-    app.router.add_post('/gemini', handle_gemini_request)
-    
-    # CORS設定を適用 (すべてのオリジンからのアクセスを許可)
-    cors = aiohttp_cors.setup(app, defaults={
-        "*": aiohttp_cors.ResourceOptions(
-            allow_credentials=True,
-            allow_methods=["GET", "POST"], # GETとPOSTの両方を許可
-            allow_headers=("X-Requested-With", "Content-Type"),
+        await interaction.followup.send(
+            "❌ Bot側で予期せぬエラーが発生しました。",
+            ephemeral=True
         )
-    })
-
-    # すべてのルートにCORSを適用
-    for route in list(app.router.routes()):
-        cors.add(route)
-
-    return app
 
 # ----------------------------------------------------------------------
-# 3. Bot本体の起動ロジック (簡略化)
+# 5. Botの起動
 # ----------------------------------------------------------------------
 
-async def start_bot_and_server():
-    web_app = setup_web_server()
-    runner = web.AppRunner(web_app)
-    await runner.setup()
-    
-    # ポートは環境変数から取得
-    port = int(os.environ.get("PORT", 8080)) 
-    
-    site = web.TCPSite(runner, host='0.0.0.0', port=port)
-    print(f"Webサーバーをポート {port} で起動します...")
-    await site.start()
-    
-    # サーバーを維持
-    while True:
-        await asyncio.sleep(3600)
+async def main():
+    """Botを起動するメイン関数。"""
+    try:
+        # Botを起動します
+        await bot.start(DISCORD_TOKEN)
+    except discord.LoginFailure:
+        print("FATAL: Discordトークンが無効です。Botを起動できません。")
+    except Exception as e:
+        print(f"Botの起動中にエラーが発生しました: {e}")
+
 
 if __name__ == '__main__':
-    # 実際のBotファイルでは、この関数を呼び出す必要があります
-    asyncio.run(start_bot_and_server())
+    asyncio.run(main())
