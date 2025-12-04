@@ -46,7 +46,7 @@ except Exception as e:
 
 
 # ----------------------------------------------------------------------
-# Discordイベントとスラッシュコマンド
+# Discordイベントとスラッシュコマンド (変更なし)
 # ----------------------------------------------------------------------
 
 @bot.event
@@ -147,6 +147,7 @@ async def ai_command(interaction: discord.Interaction, prompt: str):
 
 async def handle_ping(request):
     """Renderからのヘルスチェックに応答するハンドラー。"""
+    # Webサーバーが起動していることだけを通知すればRenderの要求は満たされます
     return web.Response(text="Bot is running and ready for Gemini requests.")
 
 def setup_web_server():
@@ -169,25 +170,29 @@ async def start_web_server():
         await site.start()
     except Exception as e:
         print(f"Webサーバーの起動に失敗しました: {e}")
+    # サーバーを維持する無限待機タスク
     await asyncio.Future() 
 
+
 # ----------------------------------------------------------------------
-# 5. BotとWebサーバーの同時起動
+# 5. BotとWebサーバーの同時起動 (修正部分)
 # ----------------------------------------------------------------------
 
 async def main():
     """Discord BotとWebサーバーを同時に起動するメイン関数。"""
-    # Webサーバーのタスクを先に作成
-    web_server_task = start_web_server()
     
-    # Discord Botの起動タスク (bot.start はログイン失敗時などに例外を出すため、後で)
-    # asyncio.gatherで両方を並行実行します
-    await asyncio.gather(bot.start(DISCORD_TOKEN), web_server_task)
+    # 1. Webサーバーをすぐに起動するタスク
+    web_server_task = asyncio.create_task(start_web_server())
+    
+    # 2. Discord Botを起動するタスク
+    discord_task = asyncio.create_task(bot.start(DISCORD_TOKEN))
+    
+    # 3. 両方のタスクが終了するまで待機
+    await asyncio.gather(discord_task, web_server_task)
 
 
 if __name__ == '__main__':
     try:
-        # discord.pyの内部で発生するエラーを防ぐため、try-exceptで囲みます
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Bot and Web Server stopped.")
