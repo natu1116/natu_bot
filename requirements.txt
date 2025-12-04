@@ -1,2 +1,5 @@
 discord.py
 python-dotenv
+google-genai
+aiohttp
+aiohttp-cors
