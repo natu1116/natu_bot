@@ -28,9 +28,17 @@ if NOTIFICATION_CHANNEL_ID:
     except ValueError:
         NOTIFICATION_CHANNEL_ID = None
 
-# ★ 追加: DMログの送信先ユーザーIDを直接定義（環境変数を使用しないため）
-# ログ送信先: ユーザーID 1402481116723548330
+# DMログの送信先ユーザーID
 TARGET_USER_ID_FOR_LOGS = 1402481116723548330 
+
+# ★ 追加: AIの接し方を定義するシステムプロンプト
+# (日本語で設定し、Geminiに日本語での振る舞いを指示します)
+AI_SYSTEM_PROMPT = (
+    "あなたは、知識豊富で、フレンドリーかつ協力的、そして少しウィットに富んだアシスタントです。すべての質問に対して、"
+    "簡潔で分かりやすい言葉で答えてください。専門的な用語を使う際は、必ず分かりやすい解説を加えてください。"
+    "ユーザーの問いかけに対して、親しみやすいトーンで応じ、会話を楽しむように努めてください。"
+)
+
 
 # Botの設定 (Intentsの設定が必要)
 intents = discord.Intents.default()
@@ -150,8 +158,7 @@ async def on_ready():
 )
 async def ai_command(interaction: discord.Interaction, prompt: str):
     """
-    /ai [prompt] で呼び出され、複数のAPIキーを順に試行して応答を返すコマンド。
-    応答メッセージのリンクをDMログに保存します。
+    /ai [prompt] で呼び出され、システムプロンプトを使用してAIの応答を制御します。
     """
     user_info = f"ユーザー: {interaction.user.name} (ID: {interaction.user.id})"
     
@@ -174,14 +181,20 @@ async def ai_command(interaction: discord.Interaction, prompt: str):
         used_client_name = client_info['name']
         
         try:
-            user_prompt = f"ユーザーからの質問/要求：{prompt}"
+            # 必須: ユーザーの質問とシステムプロンプトの両方を設定
+            contents = [
+                {"role": "user", "parts": [{"text": prompt}]}
+            ]
+            
             log_info = f"INFO: {used_client_name} キーを使用してGemini APIを試行します..."
             print(log_info)
             await send_dm_log(f"**🟡 試行:** {user_info}\nキー: {used_client_name}\n質問: `{prompt[:100]}...`")
             
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
-                contents=[user_prompt]
+                contents=contents,
+                # ★ 変更点: システムプロンプトを設定
+                config={"system_instruction": AI_SYSTEM_PROMPT} 
             )
             
             gemini_text = response.text.strip()
@@ -239,24 +252,21 @@ async def ai_command(interaction: discord.Interaction, prompt: str):
 
 
 # ----------------------------------------------------------------------
-# Webサーバーのセットアップ (ログはコンソールに残す)
+# Webサーバーのセットアップ
 # ----------------------------------------------------------------------
 
 async def handle_ping(request):
-    """Renderからのヘルスチェックに応答するハンドラー。
-    応答時に現在のBotの状態をコンソールログに出力します。"""
+    """Renderからのヘルスチェックに応答するハンドラー。"""
     
     JST = timezone(timedelta(hours=+9), 'JST')
     current_time_jst = datetime.now(JST).strftime("%Y/%m/%d %H:%M:%S %Z")
     
-    # Web Pingの情報をコンソールログに出力 (DMには送らない)
     print(
         f"🌐 [Web Ping] 応答時刻: {current_time_jst} | "
         f"有効Geminiキー: {len(gemini_clients)}個 | "
         f"ステータス: OK"
     )
 
-    # ヘルスチェックの応答テキスト
     return web.Response(text="Bot is running and ready for Gemini requests.")
 
 def setup_web_server():
