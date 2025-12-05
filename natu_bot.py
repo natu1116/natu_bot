@@ -5,7 +5,7 @@ import asyncio
 import aiohttp
 from aiohttp import web
 import aiohttp_cors 
-from datetime import datetime, timezone, timedelta # 時刻取得のためにインポート
+from datetime import datetime, timezone, timedelta
 
 # Gemini APIクライアント
 from google import genai
@@ -36,7 +36,7 @@ intents = discord.Intents.default()
 intents.message_content = True 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Geminiクライアントの初期化 (変更なし)
+# Geminiクライアントの初期化
 gemini_client = None
 try:
     if GEMINI_API_KEY:
@@ -46,7 +46,7 @@ except Exception as e:
 
 
 # ----------------------------------------------------------------------
-# Discordイベントとスラッシュコマンド (変更なし)
+# Discordイベントとスラッシュコマンド
 # ----------------------------------------------------------------------
 
 @bot.event
@@ -57,20 +57,28 @@ async def on_ready():
     # 1. コマンドの同期
     try:
         synced = await bot.tree.sync()
-        print(f"{len(synced)}個のコマンドを同期しました。")
+        print(f"DEBUG: {len(synced)}個のコマンドを同期しました。")
     except Exception as e:
-        print(f"コマンドの同期中にエラーが発生しました: {e}")
+        print(f"DEBUG: コマンドの同期中にエラーが発生しました: {e}")
         
-    # 2. ログイン通知の送信
+    # 2. ログイン通知の送信 --- デバッグ強化開始 ---
+    print(f"DEBUG: NOTIFICATION_CHANNEL_ID (数値変換後): {NOTIFICATION_CHANNEL_ID}")
+    
     if NOTIFICATION_CHANNEL_ID:
         try:
+            # Botがチャンネル情報を取得するのを少し待ちます（キャッシュ対策）
+            await asyncio.sleep(5) 
+            
             channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
             
-            # JSTでの現在時刻を取得
-            JST = timezone(timedelta(hours=+9), 'JST')
-            current_time_jst = datetime.now(JST).strftime("%Y/%m/%d %H:%M:%S %Z")
-            
             if channel:
+                # チャンネルが見つかった場合
+                print(f"DEBUG: チャンネルが見つかりました -> {channel.name} (サーバー: {channel.guild.name})")
+
+                # JSTでの現在時刻を取得
+                JST = timezone(timedelta(hours=+9), 'JST')
+                current_time_jst = datetime.now(JST).strftime("%Y/%m/%d %H:%M:%S %Z")
+                
                 embed = discord.Embed(
                     title="🤖 Botが正常に起動しました",
                     description=f"環境変数 **PORT {PORT}** でWebサーバーが稼働中です。",
@@ -80,15 +88,21 @@ async def on_ready():
                 embed.add_field(name="時刻 (JST)", value=current_time_jst, inline=False)
                 
                 await channel.send(embed=embed)
-                print(f"ログイン通知をチャンネル {NOTIFICATION_CHANNEL_ID} に送信しました。")
+                print(f"DEBUG: ログイン通知をチャンネル {NOTIFICATION_CHANNEL_ID} に送信しました。")
             else:
-                print(f"WARNING: ID {NOTIFICATION_CHANNEL_ID} のチャンネルが見つかりません。")
+                # チャンネルが見つからなかった場合
+                print(f"DEBUG: ID {NOTIFICATION_CHANNEL_ID} のチャンネルはBotが参加しているサーバーで見つかりませんでした。")
         
         except Exception as e:
-            print(f"ログイン通知の送信中にエラーが発生しました: {e}")
+            # 通知送信中の予期せぬエラー
+            print(f"DEBUG: ログイン通知の送信中にエラーが発生しました: {e}")
+            
+    else:
+        print("DEBUG: NOTIFICATION_CHANNEL_IDが設定されていない、または数値変換に失敗したため、通知はスキップされました。")
             
     print('------')
 
+# (以下、ai_command, handle_ping, setup_web_server, start_web_server, main関数は変更なし)
 
 @bot.tree.command(name="ai", description="Gemini AIに質問を送信します。")
 @discord.app_commands.describe(
@@ -115,7 +129,6 @@ async def ai_command(interaction: discord.Interaction, prompt: str):
         
         gemini_text = response.text.strip()
         
-        # 応答の分割処理
         if len(gemini_text) > 2000:
             await interaction.followup.send(
                 f"**質問:** {prompt}\n\n**AI応答 (1/2):**\n{gemini_text[:1900]}..."
@@ -141,13 +154,8 @@ async def ai_command(interaction: discord.Interaction, prompt: str):
         )
 
 
-# ----------------------------------------------------------------------
-# Webサーバーのセットアップ (Renderの要求を満たすため)
-# ----------------------------------------------------------------------
-
 async def handle_ping(request):
     """Renderからのヘルスチェックに応答するハンドラー。"""
-    # Webサーバーが起動していることだけを通知すればRenderの要求は満たされます
     return web.Response(text="Bot is running and ready for Gemini requests.")
 
 def setup_web_server():
@@ -170,24 +178,15 @@ async def start_web_server():
         await site.start()
     except Exception as e:
         print(f"Webサーバーの起動に失敗しました: {e}")
-    # サーバーを維持する無限待機タスク
     await asyncio.Future() 
 
-
-# ----------------------------------------------------------------------
-# 5. BotとWebサーバーの同時起動 (修正部分)
-# ----------------------------------------------------------------------
 
 async def main():
     """Discord BotとWebサーバーを同時に起動するメイン関数。"""
     
-    # 1. Webサーバーをすぐに起動するタスク
     web_server_task = asyncio.create_task(start_web_server())
-    
-    # 2. Discord Botを起動するタスク
     discord_task = asyncio.create_task(bot.start(DISCORD_TOKEN))
     
-    # 3. 両方のタスクが終了するまで待機
     await asyncio.gather(discord_task, web_server_task)
 
 
