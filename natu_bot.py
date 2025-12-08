@@ -293,7 +293,7 @@ async def on_message(message: discord.Message):
                 embed.add_field(name="チャンネル", value=message.channel.mention, inline=False)
                 embed.add_field(name="送信者", value=f"{message.author.name} (ID: {message.author.id})", inline=False)
                 embed.add_field(name="検出ワード", value=f"`{detected_word}`", inline=False)
-                embed.add_field(name="削除されたメッセージ内容", value=f")
+                embed.add_field(name="削除されたメッセージ内容", value=f"
                 # DMログと、可能であれば設定されたチャンネルにも送信
                 await send_dm_log(f"**🔴 自動削除:** {message.author.name} が禁止ワード `{detected_word}` を投稿しました。", embed=embed)
                 
