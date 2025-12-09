@@ -172,92 +172,6 @@ async def on_ready():
     print('------')
 
 # ----------------------------------------------------------------------
-# ★ メッセージレート制限と禁止ワードチェック
-# ----------------------------------------------------------------------
-
-@bot.event
-async def on_message(message: discord.Message):
-    """メッセージが送信されたときに実行され、スパムチェックを行います。"""
-    
-    # 1. チェック対象外のメッセージを無視
-    # Bot自身のメッセージは無視
-    if message.author.bot:
-        return
-    
-    # DMでのメッセージは無視（サーバー内でのスパム対策のため）
-    if message.guild is None:
-        return
-        
-    # 2. 管理者権限チェック
-    # メッセージ送信者が管理者権限を持っている場合は無視
-    is_administrator = message.author.guild_permissions.administrator
-    
-    # ----------------------------------------------------------------------
-    # ★ ユーザーごとのレート制限スパムチェック（非管理者のみ）
-    # ----------------------------------------------------------------------
-    if not is_administrator:
-        now = datetime.now(timezone.utc)
-        user_id = message.author.id
-
-        # 投稿履歴の更新と古いタイムスタンプの削除
-        if user_id not in spam_tracking:
-            spam_tracking[user_id] = []
-        
-        spam_tracking[user_id].append(now)
-
-        time_limit = now - timedelta(seconds=RATE_LIMIT_WINDOW_SECONDS)
-        # 60秒より古いメッセージ履歴を削除
-        spam_tracking[user_id] = [
-            ts for ts in spam_tracking[user_id] if ts > time_limit
-        ]
-
-        # 3. レート制限の確認 (30コメント/60秒を超過した場合)
-        if len(spam_tracking[user_id]) > RATE_LIMIT_MESSAGES:
-            try:
-                # 4. スパムメッセージを削除
-                if message.channel.permissions_for(message.guild.me).manage_messages:
-                    await message.delete()
-                    
-                    # 5. 警告メッセージの送信（メンション付き）
-                    warning_text = (
-                        f"🚨 **{message.author.mention}** さん、ご注意ください！\n"
-                        f"短時間（{RATE_LIMIT_WINDOW_SECONDS}秒以内）に{RATE_LIMIT_MESSAGES}件以上のメッセージを投稿しました。\n"
-                        f"スパム行為と見なされるため、このメッセージは削除されました。続けて投稿するとミュートなどの処置が取られる可能性があります。"
-                    )
-                    
-                    # 警告メッセージをチャンネルに送信 (15秒後に自動削除)
-                    await message.channel.send(warning_text, delete_after=15)
-                    
-                    # 6. 管理者へのログ送信
-                    embed = discord.Embed(
-                        title="💥 自動レート制限スパム削除ログ",
-                        description=f"ユーザー **{message.author.mention}** がレート制限を超過したため、メッセージを削除し警告しました。",
-                        color=discord.Color.brand_red()
-                    )
-                    embed.add_field(name="チャンネル", value=message.channel.mention, inline=False)
-                    embed.add_field(name="送信者", value=f"{message.author.name} (ID: {message.author.id})", inline=False)
-                    embed.add_field(name="超過回数", value=f"直近 {RATE_LIMIT_WINDOW_SECONDS}秒で {len(spam_tracking[user_id])} 回", inline=False)
-                    embed.timestamp = datetime.now(timezone(timedelta(hours=+9), 'JST'))
-                    
-                    # DMログと、可能であれば設定されたチャンネルにも送信
-                    await send_dm_log(f"**💥 レート超過:** {message.author.name} がスパム行為を行いました。", embed=embed)
-
-                    # スパム判定が確定したら、そのユーザーの履歴をリセットして、連鎖的な警告を防ぐ
-                    spam_tracking[user_id] = []
-                    
-                    # 削除された場合は、以降の処理（禁止ワードチェックやコマンド処理）は不要
-                    return 
-
-                else:
-                    print(f"ERROR: レート制限超過メッセージを削除する権限がありません。Botの権限を確認してください。")
-
-            except discord.Forbidden:
-                print(f"ERROR: レート制限超過メッセージの削除または警告の権限がありません。Botの権限を確認してください。")
-            except Exception as e:
-                print(f"ERROR: レート制限スパム処理中に予期せぬエラーが発生しました: {e}")
-
-
-    # ----------------------------------------------------------------------
     # ★ 既存の禁止ワードチェック（非管理者のみ）
     # ----------------------------------------------------------------------
     
@@ -294,13 +208,13 @@ async def on_message(message: discord.Message):
                 )
                 
                 # ここにログに必要なフィールドを追加してください
-                # embed.add_field(name="チャンネル", value=message.channel.mention, inline=False)
-                # embed.add_field(name="送信者", value=f"{message.author.name} (ID: {message.author.id})", inline=False)
-                # embed.add_field(name="検出ワード", value=f"`{detected_word}`", inline=False)
-                # embed.add_field(name="削除されたメッセージ内容", value=message.content, inline=False)
+                embed.add_field(name="チャンネル", value=message.channel.mention, inline=False)
+                embed.add_field(name="送信者", value=f"{message.author.name} (ID: {message.author.id})", inline=False)
+                embed.add_field(name="検出ワード", value=f"`{detected_word}`", inline=False)
+                embed.add_field(name="削除されたメッセージ内容", value=message.content, inline=False)
                 
                 # DMログと、可能であれば設定されたチャンネルにも送信
-                # await send_dm_log(f"**🔴 自動削除:** ...", embed=embed)
+                await send_dm_log(f"**🔴 自動削除 (禁止ワード):** {message.author.name} が禁止ワードを使用しました。", embed=embed)
                 
                 # 削除が成功しログも送信されたので、以降の処理は不要
                 return 
@@ -316,8 +230,6 @@ async def on_message(message: discord.Message):
     # スラッシュコマンドやその他の通常のコマンド処理のために、
     # 最後に必ず `await bot.process_commands(message)` を呼び出す必要があります。
     await bot.process_commands(message)
-
-
 # ----------------------------------------------------------------------
 # スラッシュコマンド (/ai)
 # ----------------------------------------------------------------------
