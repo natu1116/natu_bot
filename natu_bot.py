@@ -358,30 +358,47 @@ async def on_message(message: discord.Message):
 
 
 # ----------------------------------------------------------------------
-# ★ 管理者専用スラッシュコマンド: /name (旧 /nick)
+# ★ コマンドグループ: /name (ニックネーム管理)
 # ----------------------------------------------------------------------
-@bot.tree.command(name="name", description="メンバーのニックネームを変更します。（管理者専用）")
+
+# name コマンドグループを定義
+name_group = discord.app_commands.Group(name="name", description="メンバーのニックネーム管理コマンド（管理者専用）")
+bot.tree.add_command(name_group)
+
+
+# ----------------------------------------------------------------------
+# サブコマンド: /name set (ニックネーム設定) - 旧 /name
+# ----------------------------------------------------------------------
+@name_group.command(name="set", description="メンバーのニックネームを新しい値に設定します。")
 @discord.app_commands.describe(
     member="ニックネームを変更したいメンバーを選択してください。",
     nickname="新しく設定するニックネーム。"
 )
-# 管理者権限を持つユーザーのみがこのコマンドを実行できるように制限
 @discord.app_commands.checks.has_permissions(administrator=True)
-async def nick_command(interaction: discord.Interaction, member: discord.Member, nickname: str):
+async def name_set_command(interaction: discord.Interaction, member: discord.Member, nickname: str):
     
-    # Botが対象メンバーのニックネームを変更する権限（manage_nicknames）を持っているか確認
+    await interaction.response.defer(ephemeral=True)
+
+    # 1. Botが「ニックネームの管理」権限を持っているか確認
     if not interaction.guild.me.guild_permissions.manage_nicknames:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "❌ Botに「ニックネームの管理」権限がありません。Botのロール権限を確認してください。",
             ephemeral=True
         )
         return
 
-    # Botのロールが対象メンバーのロールより高いか確認 (Discordの仕様上の制限)
-    # サーバーオーナーのニックネームは変更できない
-    if interaction.guild.owner_id != member.id and interaction.guild.me.top_role <= member.top_role:
-        await interaction.response.send_message(
-            f"❌ Botの権限が {member.mention} さんの最高ロールよりも低いか、またはBotがサーバーオーナーのニックネームを変更しようとしています。ニックネームを変更できません。",
+    # 2. ターゲットメンバーがサーバーオーナーであるかチェック
+    if interaction.guild.owner_id == member.id:
+        await interaction.followup.send(
+            f"❌ **サーバーオーナー**である {member.mention} さんのニックネームはBotでは変更できません。",
+            ephemeral=True
+        )
+        return
+
+    # 3. Botの最高ロールが対象メンバーの最高ロールより厳密に上にあるかチェック
+    if interaction.guild.me.top_role <= member.top_role:
+        await interaction.followup.send(
+            f"❌ Botの最高ロールが {member.mention} さんの最高ロールより**低いか同等**です。Discordのロール設定でBotのロールを**ターゲットメンバーのロールより上に**配置してください。",
             ephemeral=True
         )
         return
@@ -392,13 +409,14 @@ async def nick_command(interaction: discord.Interaction, member: discord.Member,
         await member.edit(nick=nickname)
 
         # 成功メッセージ
-        await interaction.response.send_message(
-            f"✅ {member.mention} さんのニックネームを「**{old_nickname}**」から「**{nickname}**」に変更しました。"
+        await interaction.followup.send(
+            f"✅ {member.mention} さんのニックネームを「**{old_nickname}**」から「**{nickname}**」に変更しました。",
+            ephemeral=False # 全員に表示
         )
         
         # 管理者へのログ送信 (DM)
         embed = discord.Embed(
-            title="👤 ニックネーム変更ログ",
+            title="👤 ニックネーム設定ログ",
             description=f"実行者: {interaction.user.mention} (ID: {interaction.user.id})",
             color=discord.Color.blue()
         )
@@ -408,18 +426,99 @@ async def nick_command(interaction: discord.Interaction, member: discord.Member,
         embed.add_field(name="変更後ニックネーム", value=nickname, inline=True)
         embed.timestamp = datetime.now(timezone(timedelta(hours=+9), 'JST'))
 
-        await send_dm_log(f"**🔷 ニックネーム変更:** {member.name} のニックネームが変更されました。", embed=embed)
+        await send_dm_log(f"**🔷 ニックネーム設定:** {member.name} のニックネームが設定されました。", embed=embed)
 
     except discord.Forbidden:
-        await interaction.response.send_message(
-            "❌ Botにメンバーのニックネームを変更する権限がありません。",
+        await interaction.followup.send(
+            "❌ ニックネームの変更に失敗しました。Botは「ニックネームの管理」権限を持ち、かつBotの最高ロールが**ターゲットメンバーの最高ロールより上**にあることを再度確認してください。",
             ephemeral=True
         )
     except discord.HTTPException as e:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"❌ ニックネームの変更中にHTTPエラーが発生しました: {e}",
             ephemeral=True
         )
+        
+# ----------------------------------------------------------------------
+# サブコマンド: /name reset (ニックネームリセット) - 新規追加
+# ----------------------------------------------------------------------
+@name_group.command(name="reset", description="メンバーのニックネームをリセット（初期化）します。")
+@discord.app_commands.describe(
+    member="ニックネームをリセットしたいメンバーを選択してください。"
+)
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def name_reset_command(interaction: discord.Interaction, member: discord.Member):
+    
+    await interaction.response.defer(ephemeral=True)
+
+    # 1. Botが「ニックネームの管理」権限を持っているか確認
+    if not interaction.guild.me.guild_permissions.manage_nicknames:
+        await interaction.followup.send(
+            "❌ Botに「ニックネームの管理」権限がありません。Botのロール権限を確認してください。",
+            ephemeral=True
+        )
+        return
+
+    # 2. ターゲットメンバーがサーバーオーナーであるかチェック
+    if interaction.guild.owner_id == member.id:
+        await interaction.followup.send(
+            f"❌ **サーバーオーナー**である {member.mention} さんのニックネームはBotではリセットできません。",
+            ephemeral=True
+        )
+        return
+
+    # 3. Botの最高ロールが対象メンバーの最高ロールより厳密に上にあるかチェック
+    if interaction.guild.me.top_role <= member.top_role:
+        await interaction.followup.send(
+            f"❌ Botの最高ロールが {member.mention} さんの最高ロールより**低いか同等**です。Discordのロール設定でBotのロールを**ターゲットメンバーのロールより上に**配置してください。",
+            ephemeral=True
+        )
+        return
+        
+    # 4. そもそもニックネームが設定されているかチェック
+    old_nickname = member.nick
+    if old_nickname is None:
+        await interaction.followup.send(
+            f"⚠️ {member.mention} さんには現在ニックネームが設定されていません。リセットの必要はありません。",
+            ephemeral=True
+        )
+        return
+
+    try:
+        # ニックネームをリセット (nick=Noneでサーバーでのニックネームを解除)
+        await member.edit(nick=None)
+
+        # 成功メッセージ
+        await interaction.followup.send(
+            f"✅ {member.mention} さんのニックネーム「**{old_nickname}**」をリセットし、ユーザー名（`{member.name}`）に戻しました。",
+            ephemeral=False # 全員に表示
+        )
+        
+        # 管理者へのログ送信 (DM)
+        embed = discord.Embed(
+            title="🔄 ニックネームリセットログ",
+            description=f"実行者: {interaction.user.mention} (ID: {interaction.user.id})",
+            color=discord.Color.orange()
+        )
+        embed.add_field(name="チャンネル", value=interaction.channel.mention, inline=False)
+        embed.add_field(name="対象メンバー", value=f"{member.name} (ID: {member.id})", inline=False)
+        embed.add_field(name="変更前ニックネーム", value=old_nickname, inline=True)
+        embed.add_field(name="変更後ニックネーム", value="ユーザー名にリセット", inline=True)
+        embed.timestamp = datetime.now(timezone(timedelta(hours=+9), 'JST'))
+
+        await send_dm_log(f"**🔄 ニックネームリセット:** {member.name} のニックネームがリセットされました。", embed=embed)
+
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "❌ ニックネームのリセットに失敗しました。Botは「ニックネームの管理」権限を持ち、かつBotの最高ロールが**ターゲットメンバーの最高ロールより上**にあることを再度確認してください。",
+            ephemeral=True
+        )
+    except discord.HTTPException as e:
+        await interaction.followup.send(
+            f"❌ ニックネームのリセット中にHTTPエラーが発生しました: {e}",
+            ephemeral=True
+        )
+
 
 # ----------------------------------------------------------------------
 # コマンドエラーハンドリング (MissingPermissionsを処理)
@@ -436,10 +535,21 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
     else:
         # その他のエラーはデフォルトで処理
         print(f"ERROR: コマンドエラーが発生しました: {error}")
-        await interaction.response.send_message(
-            f"❌ コマンドの実行中に予期せぬエラーが発生しました: {type(error).__name__}",
-            ephemeral=True
-        )
+        try:
+            # すでに応答しているか確認
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    f"❌ コマンドの実行中に予期せぬエラーが発生しました: {type(error).__name__}",
+                    ephemeral=True
+                )
+            else:
+                 await interaction.response.send_message(
+                    f"❌ コマンドの実行中に予期せぬエラーが発生しました: {type(error).__name__}",
+                    ephemeral=True
+                )
+        except Exception:
+            # 応答に失敗した場合
+            pass
 
 
 # ----------------------------------------------------------------------
