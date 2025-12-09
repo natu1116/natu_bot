@@ -286,19 +286,23 @@ async def on_message(message: discord.Message):
                 
                 # 管理者へのログ送信
                 embed = discord.Embed(
-                    title="🗑️ 自動メッセージ削除ログ (禁止ワード)",
-                    description=f"ユーザー **{message.author.mention}** のメッセージが削除されました。",
-                    color=discord.Color.red()
-                )
-                embed.add_field(name="チャンネル", value=message.channel.mention, inline=False)
-                embed.add_field(name="送信者", value=f"{message.author.name} (ID: {message.author.id})", inline=False)
-                embed.add_field(name="検出ワード", value=f"`{detected_word}`", inline=False)
-                embed.add_field(name="削除されたメッセージ内容", value=f"
-                # DMログと、可能であれば設定されたチャンネルにも送信
-                await send_dm_log(f"**🔴 自動削除:** {message.author.name} が禁止ワード `{detected_word}` を投稿しました。", embed=embed)
+embed = discord.Embed(
+                    title="メッセージ削除ログ",
+                    description=f"ユーザー **{message.author.mention}** のメッセージが削除されました。",
+                    color=discord.Color.red()
+                )
+                embed.add_field(name="チャンネル", value=message.channel.mention, inline=False)
+                embed.add_field(name="送信者", value=f"{message.author.name} (ID: {message.author.id})", inline=False)
+                embed.add_field(name="検出ワード", value=f"`{detected_word}`", inline=False)
+                
+                # **ここを修正**：元のメッセージ内容 (message.content) を設定します
+                embed.add_field(name="削除されたメッセージ内容", value=message.content, inline=False)
                 
-                # 削除された場合は、以降の処理（コマンド処理）は不要
-                return
+                # DMログと、可能であれば設定されたチャンネルにも送信
+                await send_dm_log(f"**🔴 自動削除:** {message.author.name} が禁止ワード `{detected_word}` を投稿しました。", embed=embed)
+                
+                # 削除された場合は、以降の処理（コマンド処理）は不要
+                return
 
             except discord.Forbidden:
                 print(f"ERROR: メッセージ削除の権限がありません。Botの権限を確認してください。")
