@@ -28,7 +28,7 @@ if NOTIFICATION_CHANNEL_ID:
     except ValueError:
         NOTIFICATION_CHANNEL_ID = None
 
-# DMログの送信先ユーザーID
+# DMログの送信先ユーザーID (管理者向け通知先)
 TARGET_USER_ID_FOR_LOGS = 1402481116723548330 
 
 # ★ AIの接し方を定義するシステムプロンプト
@@ -50,7 +50,6 @@ BOT_CONFIG = {
 # ★ メッセージレート制限設定とデータ構造
 # ----------------------------------------------------------------------
 # ユーザーごとのメッセージ投稿履歴を保持 {user_id: [timestamp1, timestamp2, ...]}
-# ユーザーごとの制限です
 spam_tracking = {} 
 # 1分間（60秒）に許容される最大メッセージ数
 RATE_LIMIT_MESSAGES = 30
@@ -172,7 +171,139 @@ async def on_ready():
     print('------')
 
 # ----------------------------------------------------------------------
-    # ★ 既存の禁止ワードチェック（非管理者のみ）
+# ★ メッセージレート制限と禁止ワードチェック (統合・修正済み)
+# ----------------------------------------------------------------------
+
+@bot.event
+async def on_message(message: discord.Message):
+    """メッセージが送信されたときに実行され、スパムチェックを行います。"""
+    
+    # 1. チェック対象外のメッセージを無視
+    if message.author.bot:
+        return
+    
+    # ギルド（サーバー）外のメッセージは無視（DMなど）
+    if message.guild is None:
+        await bot.process_commands(message)
+        return
+        
+    # 2. 管理者権限チェック
+    is_administrator = message.author.guild_permissions.administrator
+    
+    # ----------------------------------------------------------------------
+    # ★ ユーザーごとのレート制限スパムチェック（非管理者のみ）
+    # ----------------------------------------------------------------------
+    if not is_administrator:
+        now = datetime.now(timezone.utc)
+        user_id = message.author.id
+
+        # 投稿履歴の更新と古いタイムスタンプの削除
+        if user_id not in spam_tracking:
+            spam_tracking[user_id] = []
+        
+        # 現在のメッセージのタイムスタンプを追加
+        spam_tracking[user_id].append(now)
+
+        time_limit = now - timedelta(seconds=RATE_LIMIT_WINDOW_SECONDS)
+        # 60秒より古いメッセージ履歴を削除
+        spam_tracking[user_id] = [
+            ts for ts in spam_tracking[user_id] if ts > time_limit
+        ]
+
+        # 3. レート制限の確認 (30コメント/60秒を超過した場合)
+        if len(spam_tracking[user_id]) > RATE_LIMIT_MESSAGES:
+            try:
+                # 4. スパムメッセージを一括削除
+                # Botが「メッセージの管理」と「メッセージ履歴を読む」権限を持っているか確認
+                perms = message.channel.permissions_for(message.guild.me)
+                if perms.manage_messages and perms.read_message_history:
+                    
+                    messages_to_delete = []
+                    
+                    # タイムウィンドウ内のメッセージをフェッチして削除対象を特定
+                    # limit=200で直近200件をチェックし、パフォーマンスと精度を両立
+                    async for msg in message.channel.history(limit=200, after=time_limit):
+                        if msg.author.id == user_id:
+                            messages_to_delete.append(msg)
+                    
+                    # トリガーとなったメッセージが履歴に載っていなければ確実に追加
+                    if message not in messages_to_delete:
+                        messages_to_delete.append(message)
+                    
+                    # 削除対象を投稿が古い順にソート (delete_messagesの挙動のため)
+                    messages_to_delete.sort(key=lambda m: m.created_at)
+
+                    if messages_to_delete:
+                        deleted_count = 0
+                        deleted_contents = [m.content for m in messages_to_delete]
+                        
+                        try:
+                            # 2週間以内のメッセージを効率的に一括削除（100件まで）
+                            # delete_messagesはリスト内のメッセージを一括削除
+                            if (datetime.now(timezone.utc) - messages_to_delete[0].created_at) < timedelta(days=14):
+                                await message.channel.delete_messages(messages_to_delete)
+                                deleted_count = len(messages_to_delete)
+                            else:
+                                # 2週間より古いメッセージが含まれる可能性がある場合は個別削除
+                                for msg in messages_to_delete:
+                                    await msg.delete()
+                                    deleted_count += 1
+                        except discord.Forbidden:
+                             # 一括削除の権限がない場合、個別に削除を試みる (delete_messagesに失敗した場合)
+                             for msg in messages_to_delete:
+                                 try:
+                                     await msg.delete()
+                                     deleted_count += 1
+                                 except (discord.Forbidden, discord.HTTPException):
+                                     continue
+                        except Exception as http_e:
+                            print(f"ERROR: メッセージの一括削除中に予期せぬHTTPエラーが発生しました: {http_e}")
+                            pass
+
+                        # 5. 警告メッセージの送信（メンション付き）
+                        warning_text = (
+                            f"🚨 **{message.author.mention}** さん、ご注意ください！\n"
+                            f"短時間（{RATE_LIMIT_WINDOW_SECONDS}秒以内）に{RATE_LIMIT_MESSAGES}件以上のメッセージを投稿しました。\n"
+                            f"スパム行為と見なされるため、**直近の{deleted_count}件のメッセージはすべて削除されました。**\n"
+                            f"続けて投稿するとミュートなどの処置が取られる可能性があります。"
+                        )
+                        
+                        await message.channel.send(warning_text, delete_after=15)
+                        
+                        # 6. 管理者へのログ送信
+                        embed = discord.Embed(
+                            title="💥 自動レート制限スパム一括削除ログ",
+                            description=f"ユーザー **{message.author.mention}** がレート制限を超過したため、直近のメッセージを一括削除しました。",
+                            color=discord.Color.brand_red()
+                        )
+                        embed.add_field(name="チャンネル", value=message.channel.mention, inline=False)
+                        embed.add_field(name="送信者", value=f"{message.author.name} (ID: {message.author.id})", inline=False)
+                        embed.add_field(name="超過回数", value=f"直近 {RATE_LIMIT_WINDOW_SECONDS}秒で {len(spam_tracking[user_id])} 回", inline=True)
+                        embed.add_field(name="削除件数", value=f"{deleted_count} 件", inline=True)
+                        
+                        log_contents = "\n".join([f"`{c[:50]}...`" for c in deleted_contents[:5]])
+                        embed.add_field(name="削除されたメッセージ (一部)", value=log_contents or "内容なし", inline=False)
+                        
+                        embed.timestamp = datetime.now(timezone(timedelta(hours=+9), 'JST'))
+                        
+                        await send_dm_log(f"**💥 レート超過一括削除:** {message.author.name} がスパム行為を行いました。", embed=embed)
+
+                        # 履歴をリセットして、連鎖的な警告を防ぐ
+                        spam_tracking[user_id] = []
+                        
+                        return # 削除されたため、以降の処理は不要
+                    
+                else:
+                    print(f"ERROR: レート制限超過メッセージを削除または履歴を読む権限がありません。Botの権限を確認してください。")
+
+            except discord.Forbidden:
+                print(f"ERROR: レート制限超過メッセージの削除または警告の権限がありません。Botの権限を確認してください。")
+            except Exception as e:
+                print(f"ERROR: レート制限スパム処理中に予期せぬエラーが発生しました: {e}")
+
+
+    # ----------------------------------------------------------------------
+    # ★ 禁止ワードチェック（非管理者のみ）
     # ----------------------------------------------------------------------
     
     # レート制限で削除されなかった、かつ非管理者のメッセージに対してのみ実行
@@ -187,7 +318,6 @@ async def on_ready():
                 
         # 禁止ワードが検出された場合の処理
         if detected_word:
-# --- 修正後のコード (try/except構造とインデントの修正) ---
 
             try:
                 # メッセージを削除
@@ -197,39 +327,36 @@ async def on_ready():
                 # 削除されたことをユーザーに通知（任意）
                 await message.channel.send(
                     f"🚨 **{message.author.mention}** さんのメッセージは不適切な内容（検出ワード: `{detected_word}`）を含むため自動的に削除されました。",
-                    delete_after=10 # 10秒後に警告メッセージも自動削除
+                    delete_after=10
                 )
 
                 # 管理者へのログ送信
                 embed = discord.Embed(
-                    title="メッセージ削除ログ",
+                    title="メッセージ削除ログ (禁止ワード)",
                     description=f"ユーザー **{message.author.mention}** のメッセージが削除されました。",
                     color=discord.Color.red()
                 )
                 
-                # ここにログに必要なフィールドを追加してください
                 embed.add_field(name="チャンネル", value=message.channel.mention, inline=False)
                 embed.add_field(name="送信者", value=f"{message.author.name} (ID: {message.author.id})", inline=False)
                 embed.add_field(name="検出ワード", value=f"`{detected_word}`", inline=False)
-                embed.add_field(name="削除されたメッセージ内容", value=message.content, inline=False)
+                # メッセージ内容を埋め込みに直接格納（最大1024文字）
+                content_preview = message.content[:1000] + ('...' if len(message.content) > 1000 else '')
+                embed.add_field(name="削除されたメッセージ内容", value=content_preview, inline=False)
                 
-                # DMログと、可能であれば設定されたチャンネルにも送信
                 await send_dm_log(f"**🔴 自動削除 (禁止ワード):** {message.author.name} が禁止ワードを使用しました。", embed=embed)
                 
-                # 削除が成功しログも送信されたので、以降の処理は不要
-                return 
+                return # 削除が成功したので、以降の処理は不要
 
             except discord.Forbidden:
-                # 権限がない場合のエラー処理
                 print(f"ERROR: メッセージ削除の権限がありません。Botの権限を確認してください。")
             except Exception as e:
-                # その他のエラー処理
                 print(f"ERROR: メッセージの自動削除中に予期せぬエラーが発生しました: {e}")
 
-# メッセージが削除できなかった場合、コマンド処理などが続く
-    # スラッシュコマンドやその他の通常のコマンド処理のために、
-    # 最後に必ず `await bot.process_commands(message)` を呼び出す必要があります。
+    # スラッシュコマンドやその他の通常のコマンド処理
     await bot.process_commands(message)
+
+
 # ----------------------------------------------------------------------
 # スラッシュコマンド (/ai)
 # ----------------------------------------------------------------------
@@ -257,7 +384,7 @@ async def ai_command(interaction: discord.Interaction, prompt: str):
     gemini_text = None
     used_client_name = None
     
-    # クライアントのリストを順に試行する
+    # クライアントのリストを順に試行する（フォールバック）
     for client_info in gemini_clients:
         client = client_info['client']
         used_client_name = client_info['name']
@@ -334,11 +461,11 @@ async def ai_command(interaction: discord.Interaction, prompt: str):
 
 
 # ----------------------------------------------------------------------
-# Webサーバーのセットアップ
+# Webサーバーのセットアップ (ヘルスチェック用)
 # ----------------------------------------------------------------------
 
 async def handle_ping(request):
-    """Renderからのヘルスチェックに応答するハンドラー。"""
+    """RenderなどのPaaS環境からのヘルスチェックに応答するハンドラー。"""
     
     JST = timezone(timedelta(hours=+9), 'JST')
     current_time_jst = datetime.now(JST).strftime("%Y/%m/%d %H:%M:%S %Z")
@@ -377,6 +504,11 @@ async def start_web_server():
 async def main():
     """Discord BotとWebサーバーを同時に起動するメイン関数。"""
     
+    # Discord Botのトークンが設定されているか確認
+    if not DISCORD_TOKEN:
+        print("FATAL ERROR: DISCORD_TOKEN が設定されていません。Botを起動できません。")
+        return
+
     web_server_task = asyncio.create_task(start_web_server())
     discord_task = asyncio.create_task(bot.start(DISCORD_TOKEN))
     
