@@ -235,11 +235,11 @@ async def on_message(message: discord.Message):
 
                     if messages_to_delete:
                         deleted_count = 0
-                        deleted_contents = [m.content for c in messages_to_delete]
+                        # List comprehensionsでコンテンツを抽出
+                        deleted_contents = [m.content for m in messages_to_delete]
                         
                         try:
                             # 2週間以内のメッセージを効率的に一括削除（100件まで）
-                            # delete_messagesはリスト内のメッセージを一括削除
                             if (datetime.now(timezone.utc) - messages_to_delete[0].created_at) < timedelta(days=14):
                                 await message.channel.delete_messages(messages_to_delete)
                                 deleted_count = len(messages_to_delete)
@@ -249,7 +249,7 @@ async def on_message(message: discord.Message):
                                     await msg.delete()
                                     deleted_count += 1
                         except discord.Forbidden:
-                             # 一括削除の権限がない場合、個別に削除を試みる (delete_messagesに失敗した場合)
+                             # 一括削除の権限がない場合、個別に削除を試みる
                              for msg in messages_to_delete:
                                  try:
                                      await msg.delete()
@@ -378,9 +378,10 @@ async def nick_command(interaction: discord.Interaction, member: discord.Member,
         return
 
     # Botのロールが対象メンバーのロールより高いか確認 (Discordの仕様上の制限)
-    if interaction.guild.me.top_role <= member.top_role and interaction.guild.owner_id != member.id:
+    # サーバーオーナーのニックネームは変更できない
+    if interaction.guild.owner_id != member.id and interaction.guild.me.top_role <= member.top_role:
         await interaction.response.send_message(
-            f"❌ Botの権限が {member.mention} さんの最高ロールよりも低いため、ニックネームを変更できません。",
+            f"❌ Botの権限が {member.mention} さんの最高ロールよりも低いか、またはBotがサーバーオーナーのニックネームを変更しようとしています。ニックネームを変更できません。",
             ephemeral=True
         )
         return
@@ -401,6 +402,7 @@ async def nick_command(interaction: discord.Interaction, member: discord.Member,
             description=f"実行者: {interaction.user.mention} (ID: {interaction.user.id})",
             color=discord.Color.blue()
         )
+        embed.add_field(name="チャンネル", value=interaction.channel.mention, inline=False)
         embed.add_field(name="対象メンバー", value=f"{member.name} (ID: {member.id})", inline=False)
         embed.add_field(name="変更前ニックネーム", value=old_nickname, inline=True)
         embed.add_field(name="変更後ニックネーム", value=nickname, inline=True)
@@ -420,7 +422,7 @@ async def nick_command(interaction: discord.Interaction, member: discord.Member,
         )
 
 # ----------------------------------------------------------------------
-# コマンドエラーハンドリング
+# コマンドエラーハンドリング (MissingPermissionsを処理)
 # ----------------------------------------------------------------------
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
@@ -430,7 +432,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
             "❌ あなたにはこのコマンドを実行するための**管理者権限**がありません。",
             ephemeral=True
         )
-        print(f"WARNING: 権限のないユーザー {interaction.user.name} が /nick を実行しようとしました。")
+        print(f"WARNING: 権限のないユーザー {interaction.user.name} が {interaction.command.name} を実行しようとしました。")
     else:
         # その他のエラーはデフォルトで処理
         print(f"ERROR: コマンドエラーが発生しました: {error}")
@@ -443,7 +445,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
 # ----------------------------------------------------------------------
 # スラッシュコマンド (/ai)
 # ----------------------------------------------------------------------
-# (省略: 前回の/aiコマンドはそのまま保持)
 
 @bot.tree.command(name="ai", description="Gemini AIに質問を送信します。")
 @discord.app_commands.describe(
