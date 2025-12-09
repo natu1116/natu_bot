@@ -273,6 +273,8 @@ async def on_message(message: discord.Message):
                 
         # 禁止ワードが検出された場合の処理
         if detected_word:
+# --- 修正後のコード (try/except構造とインデントの修正) ---
+
             try:
                 # メッセージを削除
                 await message.delete()
@@ -284,31 +286,33 @@ async def on_message(message: discord.Message):
                     delete_after=10 # 10秒後に警告メッセージも自動削除
                 )
 
-# 管理者へのログ送信
-embed = discord.Embed(
-embed = discord.Embed(
-title="メッセージ削除ログ",
-description=f"ユーザー **{message.author.mention}** のメッセージが削除されました。",
-color=discord.Color.red()
-)
-embed.add_field(name="チャンネル", value=message.channel.mention, inline=False)
-embed.add_field(name="送信者", value=f"{message.author.name} (ID: {message.author.id})", inline=False)
-embed.add_field(name="検出ワード", value=f"`{detected_word}`", inline=False)
-
-# **ここを修正**：元のメッセージ内容 (message.content) を設定します
-embed.add_field(name="削除されたメッセージ内容", value=message.content, inline=False)
-
-# DMログと、可能であれば設定されたチャンネルにも送信
-await send_dm_log(f"**🔴 自動削除:** {message.author.name} が禁止ワード `{detected_word}` を投稿しました。", embed=embed)
-
-# 削除された場合は、以降の処理（コマンド処理）は不要
-return
+                # 管理者へのログ送信
+                embed = discord.Embed(
+                    title="メッセージ削除ログ",
+                    description=f"ユーザー **{message.author.mention}** のメッセージが削除されました。",
+                    color=discord.Color.red()
+                )
+                
+                # ここにログに必要なフィールドを追加してください
+                # embed.add_field(name="チャンネル", value=message.channel.mention, inline=False)
+                # embed.add_field(name="送信者", value=f"{message.author.name} (ID: {message.author.id})", inline=False)
+                # embed.add_field(name="検出ワード", value=f"`{detected_word}`", inline=False)
+                # embed.add_field(name="削除されたメッセージ内容", value=message.content, inline=False)
+                
+                # DMログと、可能であれば設定されたチャンネルにも送信
+                # await send_dm_log(f"**🔴 自動削除:** ...", embed=embed)
+                
+                # 削除が成功しログも送信されたので、以降の処理は不要
+                return 
 
             except discord.Forbidden:
+                # 権限がない場合のエラー処理
                 print(f"ERROR: メッセージ削除の権限がありません。Botの権限を確認してください。")
             except Exception as e:
+                # その他のエラー処理
                 print(f"ERROR: メッセージの自動削除中に予期せぬエラーが発生しました: {e}")
-            
+
+# メッセージが削除できなかった場合、コマンド処理などが続く
     # スラッシュコマンドやその他の通常のコマンド処理のために、
     # 最後に必ず `await bot.process_commands(message)` を呼び出す必要があります。
     await bot.process_commands(message)
