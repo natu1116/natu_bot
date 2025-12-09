@@ -287,7 +287,7 @@ async def on_message(message: discord.Message):
                 # 管理者へのログ送信
                 embed = discord.Embed(
 embed = discord.Embed(
-                    title="メッセージ削除ログ",
+title="メッセージ削除ログ",
                     description=f"ユーザー **{message.author.mention}** のメッセージが削除されました。",
                     color=discord.Color.red()
                 )
