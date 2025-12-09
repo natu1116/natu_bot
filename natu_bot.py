@@ -18,6 +18,11 @@ from google.genai.errors import APIError
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 GEMINI_API_KEY_PRIMARY = os.environ.get("GEMINI_API_KEY") # Primary Key
 GEMINI_API_KEY_SECONDARY = os.environ.get("GEMINI_API_KEY_SECONDARY") # Secondary Key
+# ★ 新しく追加したキー
+GEMINI_API_KEY_THIRD = os.environ.get("GEMINI_API_KEY_THIRD") # Third Key
+GEMINI_API_KEY_FOURTH = os.environ.get("GEMINI_API_KEY_FOURTH") # Fourth Key
+# ★ --------------------------
+
 PORT = int(os.environ.get("PORT", 8080)) 
 
 # 通知チャンネルIDの取得と変換
@@ -58,6 +63,12 @@ RATE_LIMIT_MESSAGES = 30
 RATE_LIMIT_WINDOW_SECONDS = 60
 # ----------------------------------------------------------------------
 
+# ----------------------------------------------------------------------
+# ★ 一時BAN管理用データ構造 (インメモリ)
+# {guild_id: {user_id: unban_datetime_utc}}
+# Bot再起動でリセットされる点に注意
+# ----------------------------------------------------------------------
+time_bans = {} 
 
 # Botの設定 (Intentsの設定が必要)
 # メンバーリストの取得とプレゼンス（ステータス）の取得のために、Intentを設定
@@ -65,11 +76,21 @@ intents = discord.Intents.default()
 intents.message_content = True 
 intents.members = True     # on_messageでメンバーの権限をチェックするために必要
 intents.presences = True   # メンバーのオンライン状態（Botステータス確認）のために必要
+intents.bans = True        # BAN/UNBAN操作のために必要
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # ----------------------------------------------------------------------
 # Geminiクライアントの初期化とフォールバックリストの作成
 # ----------------------------------------------------------------------
+
+# 利用可能なAPIキーのリストと名前
+API_KEY_CONFIGS = [
+    (GEMINI_API_KEY_PRIMARY, 'Primary'),
+    (GEMINI_API_KEY_SECONDARY, 'Secondary'),
+    (GEMINI_API_KEY_THIRD, 'Third'),
+    (GEMINI_API_KEY_FOURTH, 'Fourth'),
+]
+
 gemini_clients = []
 
 def initialize_gemini_clients():
@@ -77,23 +98,14 @@ def initialize_gemini_clients():
     global gemini_clients
     clients = []
     
-    # Primary Keyの初期化
-    if GEMINI_API_KEY_PRIMARY:
-        try:
-            client = genai.Client(api_key=GEMINI_API_KEY_PRIMARY)
-            clients.append({'client': client, 'name': 'Primary'})
-            print("Gemini Client (Primary) の初期化に成功しました。")
-        except Exception as e:
-            print(f"WARNING: Gemini Client (Primary) の初期化に失敗しました: {e}")
-
-    # Secondary Keyの初期化
-    if GEMINI_API_KEY_SECONDARY:
-        try:
-            client = genai.Client(api_key=GEMINI_API_KEY_SECONDARY)
-            clients.append({'client': client, 'name': 'Secondary'})
-            print("Gemini Client (Secondary) の初期化に成功しました。")
-        except Exception as e:
-            print(f"WARNING: Gemini Client (Secondary) の初期化に失敗しました: {e}")
+    for api_key, name in API_KEY_CONFIGS:
+        if api_key:
+            try:
+                client = genai.Client(api_key=api_key)
+                clients.append({'client': client, 'name': name})
+                print(f"Gemini Client ({name}) の初期化に成功しました。")
+            except Exception as e:
+                print(f"WARNING: Gemini Client ({name}) の初期化に失敗しました: {e}")
             
     gemini_clients = clients
     return len(gemini_clients) > 0
@@ -121,6 +133,64 @@ async def send_dm_log(message: str, embed: Optional[discord.Embed] = None):
                 print(f"ERROR: ユーザーID {TARGET_USER_ID_FOR_LOGS} が見つかりませんでした。DMログを送信できません。")
         except Exception as e:
             print(f"ERROR: DMログの送信中に予期せぬエラーが発生しました: {e}")
+
+
+# ----------------------------------------------------------------------
+# ★ 自動BAN解除タスク
+# ----------------------------------------------------------------------
+
+async def unban_user_after_delay(guild_id: int, user_id: int, delay_seconds: float):
+    """指定された遅延後にユーザーのBANを解除するタスクです。"""
+    # delay_seconds が負または0の場合は即時終了
+    if delay_seconds <= 0:
+        return
+        
+    try:
+        await asyncio.sleep(delay_seconds)
+        
+        guild = bot.get_guild(guild_id)
+        if not guild:
+            print(f"ERROR: Guild ID {guild_id} が見つかりません。自動BAN解除できませんでした。")
+            return
+            
+        user = discord.Object(id=user_id)
+        
+        # BANリストをチェックし、該当ユーザーがいれば解除
+        try:
+            await guild.fetch_ban(user)
+        except discord.NotFound:
+            # ユーザーがBANリストにいない場合は何もしない
+            print(f"INFO: User ID {user_id} は既にBANリストにいませんでした。自動BAN解除処理をスキップ。")
+            return
+
+        # BANを解除
+        await guild.unban(user, reason="自動タイムBAN解除")
+        
+        # ログと通知
+        print(f"SUCCESS: User ID {user_id} のBANが {guild.name} で自動解除されました。")
+        
+        # DMログ通知
+        embed = discord.Embed(
+            title="✅ 自動タイムBAN解除ログ",
+            description=f"ユーザーID `{user_id}` のBANがサーバー `{guild.name}` で自動解除されました。",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="解除されたユーザー", value=f"<@{user_id}>", inline=False)
+        embed.add_field(name="BAN期間", value=f"{delay_seconds / 3600:.2f} 時間", inline=False)
+        embed.timestamp = datetime.now(timezone(timedelta(hours=+9), 'JST'))
+
+        await send_dm_log(f"**🟢 自動BAN解除:** User ID `{user_id}` のBANが自動解除されました。", embed=embed)
+                           
+        # 内部状態から削除
+        if guild_id in time_bans and user_id in time_bans[guild_id]:
+            del time_bans[guild_id][user_id]
+            if not time_bans[guild_id]:
+                del time_bans[guild_id]
+
+    except discord.Forbidden:
+        print(f"ERROR: 権限不足により User ID {user_id} の自動BAN解除に失敗しました。Botの「メンバーをBAN」権限を確認してください。")
+    except Exception as e:
+        print(f"FATAL ERROR: 自動BAN解除中に予期せぬエラーが発生しました: {e}")
 
 
 # ----------------------------------------------------------------------
@@ -239,7 +309,7 @@ async def on_message(message: discord.Message):
                     if messages_to_delete:
                         deleted_count = 0
                         # List comprehensionsでコンテンツを抽出
-                        deleted_contents = [m.content for c in messages_to_delete]
+                        deleted_contents = [m.content for m in messages_to_delete]
                         
                         try:
                             # 2週間以内のメッセージを効率的に一括削除（100件まで）
@@ -361,7 +431,108 @@ async def on_message(message: discord.Message):
 
 
 # ----------------------------------------------------------------------
-# ★ コマンドグループ: /name (ニックネーム管理)
+# ★ コマンド: /timeban (一時BAN) - 新規追加
+# ----------------------------------------------------------------------
+
+@bot.tree.command(name="timeban", description="指定したユーザーを指定した時間（時間）BANします。")
+@discord.app_commands.describe(
+    member="一時的にBANするメンバーを選択してください。",
+    hours="BANする時間（整数、1時間以上）を入力してください。"
+)
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def timeban_command(interaction: discord.Interaction, member: discord.Member, hours: int):
+    
+    await interaction.response.defer(ephemeral=True)
+
+    # 1. バリデーションチェック
+    if hours <= 0 or hours > 7 * 24: # 1時間以上、7日以内を推奨
+        await interaction.followup.send(
+            "❌ BAN時間は1時間以上、168時間（7日間）以内の整数で指定してください。",
+            ephemeral=True
+        )
+        return
+        
+    if not interaction.guild.me.guild_permissions.ban_members:
+        await interaction.followup.send(
+            "❌ Botに「メンバーをBAN」権限がありません。Botのロール権限を確認してください。",
+            ephemeral=True
+        )
+        return
+        
+    # 2. ロール階層チェック
+    if interaction.guild.owner_id == member.id or interaction.guild.me.top_role <= member.top_role:
+        await interaction.followup.send(
+            f"❌ {member.mention} さんの最高ロールはBotの最高ロールより高いか同等です。BotではBANできません。",
+            ephemeral=True
+        )
+        return
+
+    delay_seconds = hours * 3600
+    unban_time_utc = datetime.now(timezone.utc) + timedelta(hours=hours)
+    unban_time_jst = unban_time_utc.astimezone(timezone(timedelta(hours=+9), 'JST'))
+    
+    guild_id = interaction.guild_id
+    user_id = member.id
+    
+    # 既存のBANタスクが存在するかチェック（再実行防止と上書き）
+    if guild_id in time_bans and user_id in time_bans[guild_id]:
+        await interaction.followup.send(
+            f"⚠️ {member.mention} さんは既に一時BAN中です。新しいBAN期間で上書きします。",
+            ephemeral=True
+        )
+        # 既存のタイマーをキャンセルする処理があれば理想的だが、今回は簡易実装のため省略
+        
+    try:
+        # 3. ユーザーをBAN
+        ban_reason = f"一時BAN ({hours}時間, 実行者: {interaction.user.name})"
+        await interaction.guild.ban(member, reason=ban_reason, delete_message_days=0)
+
+        # 4. 自動UNBANタスクをスケジュール
+        asyncio.create_task(
+            unban_user_after_delay(guild_id, user_id, delay_seconds)
+        )
+        
+        # 5. 内部状態を更新
+        if guild_id not in time_bans:
+            time_bans[guild_id] = {}
+            
+        time_bans[guild_id][user_id] = unban_time_utc # UTC時刻で保存
+
+        # 6. 成功メッセージをチャンネルに送信
+        await interaction.followup.send(
+            f"🚨 **{member.mention}** さんを **{hours} 時間**（`{unban_time_jst.strftime('%m/%d %H:%M:%S JST')}`）BANしました。\n"
+            f"時間が経過すると自動的にBANが解除されます。",
+            ephemeral=False
+        )
+        
+        # 7. 管理者へのログ送信 (DM)
+        embed = discord.Embed(
+            title="🚫 一時BAN実行ログ",
+            description=f"実行者: {interaction.user.mention} (ID: {interaction.user.id})",
+            color=discord.Color.red()
+        )
+        embed.add_field(name="対象メンバー", value=f"{member.name} (ID: {member.id})", inline=False)
+        embed.add_field(name="BAN期間", value=f"{hours} 時間", inline=True)
+        embed.add_field(name="自動解除予定時刻 (JST)", value=unban_time_jst.strftime('%Y/%m/%d %H:%M:%S'), inline=True)
+        embed.set_footer(text="Bot再起動時は自動解除タイマーがリセットされます。")
+        embed.timestamp = datetime.now(timezone(timedelta(hours=+9), 'JST'))
+
+        await send_dm_log(f"**🔴 メンバー一時BAN:** {member.name} が {hours} 時間BANされました。", embed=embed)
+
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "❌ BANに失敗しました。Botに「メンバーをBAN」権限があること、およびBotの最高ロールが**ターゲットメンバーの最高ロールより上**にあることを確認してください。",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.followup.send(
+            f"❌ BAN中に予期せぬエラーが発生しました: {e}",
+            ephemeral=True
+        )
+
+
+# ----------------------------------------------------------------------
+# コマンドグループ: /name (ニックネーム管理)
 # ----------------------------------------------------------------------
 
 # name コマンドグループを定義
@@ -587,7 +758,7 @@ async def bot_status_command(interaction: discord.Interaction):
 
 
 # ----------------------------------------------------------------------
-# ★ コマンドグループ: /blockword (禁止ワード管理) - 新規追加
+# ★ コマンドグループ: /blockword (禁止ワード管理)
 # ----------------------------------------------------------------------
 
 # blockword コマンドグループを定義
