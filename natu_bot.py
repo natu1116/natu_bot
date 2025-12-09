@@ -59,9 +59,11 @@ RATE_LIMIT_WINDOW_SECONDS = 60
 
 
 # Botの設定 (Intentsの設定が必要)
+# メンバーリストの取得とプレゼンス（ステータス）の取得のために、Intentを設定
 intents = discord.Intents.default()
 intents.message_content = True 
-intents.members = True # on_messageでメンバーの権限をチェックするために必要
+intents.members = True     # on_messageでメンバーの権限をチェックするために必要
+intents.presences = True   # メンバーのオンライン状態（Botステータス確認）のために必要
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # ----------------------------------------------------------------------
@@ -367,7 +369,7 @@ bot.tree.add_command(name_group)
 
 
 # ----------------------------------------------------------------------
-# サブコマンド: /name set (ニックネーム設定) - 旧 /name
+# サブコマンド: /name set (ニックネーム設定)
 # ----------------------------------------------------------------------
 @name_group.command(name="set", description="メンバーのニックネームを新しい値に設定します。")
 @discord.app_commands.describe(
@@ -440,7 +442,7 @@ async def name_set_command(interaction: discord.Interaction, member: discord.Mem
         )
         
 # ----------------------------------------------------------------------
-# サブコマンド: /name reset (ニックネームリセット) - 新規追加
+# サブコマンド: /name reset (ニックネームリセット)
 # ----------------------------------------------------------------------
 @name_group.command(name="reset", description="メンバーのニックネームをリセット（初期化）します。")
 @discord.app_commands.describe(
@@ -518,6 +520,69 @@ async def name_reset_command(interaction: discord.Interaction, member: discord.M
             f"❌ ニックネームのリセット中にHTTPエラーが発生しました: {e}",
             ephemeral=True
         )
+
+# ----------------------------------------------------------------------
+# ★ 新規スラッシュコマンド: /bot (Botステータス確認)
+# ----------------------------------------------------------------------
+@bot.tree.command(name="bot", description="サーバーに存在するBotのオンライン状態を確認します。")
+async def bot_status_command(interaction: discord.Interaction):
+    
+    await interaction.response.defer() # 処理に時間がかかる可能性があるためdefer
+    
+    # サーバーの全メンバーを取得（Botを含む）
+    # .membersはキャッシュされたメンバーリストを使用
+    bot_members = [
+        member for member in interaction.guild.members if member.bot
+    ]
+    
+    if not bot_members:
+        await interaction.followup.send("このサーバーにはBotが存在しません。")
+        return
+
+    # ステータスごとのアイコンと名前を格納する辞書
+    status_map = {
+        discord.Status.online: "🟢 **[オンライン]**",
+        discord.Status.idle: "🌙 **[退席中]**",
+        discord.Status.dnd: "🔴 **[取り込み中]**",
+        discord.Status.offline: "⚫ **[オフライン]**",
+        discord.Status.invisible: "⚫ **[オフライン]**",
+    }
+    
+    # Botリストをステータス（オンライン順）でソート
+    # Sort order: online > dnd > idle > offline
+    def sort_key(member):
+        status_order = {
+            discord.Status.online: 0,
+            discord.Status.dnd: 1,
+            discord.Status.idle: 2,
+            discord.Status.offline: 3,
+            discord.Status.invisible: 3,
+        }
+        return status_order.get(member.status, 4) # 未知のステータスは最後
+
+    sorted_bots = sorted(bot_members, key=sort_key)
+    
+    # 結果の文字列を生成
+    bot_list_lines = []
+    for bot_member in sorted_bots:
+        # ニックネームがあればニックネーム、なければユーザー名を使用
+        display_name = bot_member.nick if bot_member.nick else bot_member.name
+        
+        # ステータスアイコンを取得
+        status_icon = status_map.get(bot_member.status, "⚪ **[不明]**")
+        
+        bot_list_lines.append(f"{status_icon} `{display_name}`")
+
+    # 応答メッセージの作成
+    # Embedを使用して見やすく整形
+    embed = discord.Embed(
+        title=f"🤖 このサーバーのBotステータス (現在 {len(bot_members)} 件)",
+        description="\n".join(bot_list_lines),
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="オンライン状態はDiscordのステータスに基づいています。")
+    
+    await interaction.followup.send(embed=embed)
 
 
 # ----------------------------------------------------------------------
