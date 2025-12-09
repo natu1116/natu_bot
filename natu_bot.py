@@ -358,9 +358,9 @@ async def on_message(message: discord.Message):
 
 
 # ----------------------------------------------------------------------
-# ★ 管理者専用スラッシュコマンド: /nick
+# ★ 管理者専用スラッシュコマンド: /name (旧 /nick)
 # ----------------------------------------------------------------------
-@bot.tree.command(name="nick", description="メンバーのニックネームを変更します。（管理者専用）")
+@bot.tree.command(name="name", description="メンバーのニックネームを変更します。（管理者専用）")
 @discord.app_commands.describe(
     member="ニックネームを変更したいメンバーを選択してください。",
     nickname="新しく設定するニックネーム。"
