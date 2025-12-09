@@ -235,7 +235,7 @@ async def on_message(message: discord.Message):
 
                     if messages_to_delete:
                         deleted_count = 0
-                        deleted_contents = [m.content for m in messages_to_delete]
+                        deleted_contents = [m.content for c in messages_to_delete]
                         
                         try:
                             # 2週間以内のメッセージを効率的に一括削除（100件まで）
@@ -358,8 +358,92 @@ async def on_message(message: discord.Message):
 
 
 # ----------------------------------------------------------------------
+# ★ 管理者専用スラッシュコマンド: /nick
+# ----------------------------------------------------------------------
+@bot.tree.command(name="nick", description="メンバーのニックネームを変更します。（管理者専用）")
+@discord.app_commands.describe(
+    member="ニックネームを変更したいメンバーを選択してください。",
+    nickname="新しく設定するニックネーム。"
+)
+# 管理者権限を持つユーザーのみがこのコマンドを実行できるように制限
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def nick_command(interaction: discord.Interaction, member: discord.Member, nickname: str):
+    
+    # Botが対象メンバーのニックネームを変更する権限（manage_nicknames）を持っているか確認
+    if not interaction.guild.me.guild_permissions.manage_nicknames:
+        await interaction.response.send_message(
+            "❌ Botに「ニックネームの管理」権限がありません。Botのロール権限を確認してください。",
+            ephemeral=True
+        )
+        return
+
+    # Botのロールが対象メンバーのロールより高いか確認 (Discordの仕様上の制限)
+    if interaction.guild.me.top_role <= member.top_role and interaction.guild.owner_id != member.id:
+        await interaction.response.send_message(
+            f"❌ Botの権限が {member.mention} さんの最高ロールよりも低いため、ニックネームを変更できません。",
+            ephemeral=True
+        )
+        return
+
+    try:
+        # ニックネームを変更
+        old_nickname = member.nick if member.nick else member.name
+        await member.edit(nick=nickname)
+
+        # 成功メッセージ
+        await interaction.response.send_message(
+            f"✅ {member.mention} さんのニックネームを「**{old_nickname}**」から「**{nickname}**」に変更しました。"
+        )
+        
+        # 管理者へのログ送信 (DM)
+        embed = discord.Embed(
+            title="👤 ニックネーム変更ログ",
+            description=f"実行者: {interaction.user.mention} (ID: {interaction.user.id})",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="対象メンバー", value=f"{member.name} (ID: {member.id})", inline=False)
+        embed.add_field(name="変更前ニックネーム", value=old_nickname, inline=True)
+        embed.add_field(name="変更後ニックネーム", value=nickname, inline=True)
+        embed.timestamp = datetime.now(timezone(timedelta(hours=+9), 'JST'))
+
+        await send_dm_log(f"**🔷 ニックネーム変更:** {member.name} のニックネームが変更されました。", embed=embed)
+
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "❌ Botにメンバーのニックネームを変更する権限がありません。",
+            ephemeral=True
+        )
+    except discord.HTTPException as e:
+        await interaction.response.send_message(
+            f"❌ ニックネームの変更中にHTTPエラーが発生しました: {e}",
+            ephemeral=True
+        )
+
+# ----------------------------------------------------------------------
+# コマンドエラーハンドリング
+# ----------------------------------------------------------------------
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+    if isinstance(error, discord.app_commands.MissingPermissions):
+        # 権限がない場合のエラー処理
+        await interaction.response.send_message(
+            "❌ あなたにはこのコマンドを実行するための**管理者権限**がありません。",
+            ephemeral=True
+        )
+        print(f"WARNING: 権限のないユーザー {interaction.user.name} が /nick を実行しようとしました。")
+    else:
+        # その他のエラーはデフォルトで処理
+        print(f"ERROR: コマンドエラーが発生しました: {error}")
+        await interaction.response.send_message(
+            f"❌ コマンドの実行中に予期せぬエラーが発生しました: {type(error).__name__}",
+            ephemeral=True
+        )
+
+
+# ----------------------------------------------------------------------
 # スラッシュコマンド (/ai)
 # ----------------------------------------------------------------------
+# (省略: 前回の/aiコマンドはそのまま保持)
 
 @bot.tree.command(name="ai", description="Gemini AIに質問を送信します。")
 @discord.app_commands.describe(
