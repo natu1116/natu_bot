@@ -284,8 +284,8 @@ async def on_message(message: discord.Message):
                     delete_after=10 # 10秒後に警告メッセージも自動削除
                 )
 
-                # 管理者へのログ送信
-                embed = discord.Embed(
+# 管理者へのログ送信
+embed = discord.Embed(
 embed = discord.Embed(
 title="メッセージ削除ログ",
 description=f"ユーザー **{message.author.mention}** のメッセージが削除されました。",
