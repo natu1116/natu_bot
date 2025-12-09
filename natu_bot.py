@@ -39,12 +39,13 @@ AI_SYSTEM_PROMPT = (
     "なお、あなたは、ユーザーの問いかけに1度しか返す事ができないことを考えた返答をしてください。"
 )
 
-# ★ Botの設定（禁止ワードリストなど）
-BOT_CONFIG = {
-    # 検出したいスパム/禁止ワードのリスト（小文字で定義することを推奨）
-    "BANNED_WORDS": ["あらし", "広告", "宣伝", "discord.gg", "https://discord.gg"], 
-    "MODERATION_LOG_CHANNEL": NOTIFICATION_CHANNEL_ID # 削除ログの送信先チャンネル（通知チャンネルを流用）
-}
+# ----------------------------------------------------------------------
+# ★ 禁止ワードリスト (インメモリで管理)
+# Bot再起動で初期値に戻ります。
+# ----------------------------------------------------------------------
+BANNED_WORDS = set([
+    "あらし", "広告", "宣伝", "discord.gg", "https://discord.gg"
+])
 
 # ----------------------------------------------------------------------
 # ★ メッセージレート制限設定とデータ構造
@@ -238,7 +239,7 @@ async def on_message(message: discord.Message):
                     if messages_to_delete:
                         deleted_count = 0
                         # List comprehensionsでコンテンツを抽出
-                        deleted_contents = [m.content for m in messages_to_delete]
+                        deleted_contents = [m.content for c in messages_to_delete]
                         
                         try:
                             # 2週間以内のメッセージを効率的に一括削除（100件まで）
@@ -308,12 +309,12 @@ async def on_message(message: discord.Message):
     # ★ 禁止ワードチェック（非管理者のみ）
     # ----------------------------------------------------------------------
     
-    # レート制限で削除されなかった、かつ非管理者のメッセージに対してのみ実行
-    if not is_administrator:
+    # グローバルで定義されたBANNED_WORDSリストを使用
+    if not is_administrator and BANNED_WORDS:
         content_lower = message.content.lower()
         detected_word = None
         
-        for word in BOT_CONFIG["BANNED_WORDS"]:
+        for word in BANNED_WORDS:
             if word in content_lower:
                 detected_word = word
                 break
@@ -522,7 +523,7 @@ async def name_reset_command(interaction: discord.Interaction, member: discord.M
         )
 
 # ----------------------------------------------------------------------
-# ★ 新規スラッシュコマンド: /bot (Botステータス確認)
+# スラッシュコマンド: /bot (Botステータス確認)
 # ----------------------------------------------------------------------
 @bot.tree.command(name="bot", description="サーバーに存在するBotのオンライン状態を確認します。")
 async def bot_status_command(interaction: discord.Interaction):
@@ -583,6 +584,89 @@ async def bot_status_command(interaction: discord.Interaction):
     embed.set_footer(text="オンライン状態はDiscordのステータスに基づいています。")
     
     await interaction.followup.send(embed=embed)
+
+
+# ----------------------------------------------------------------------
+# ★ コマンドグループ: /blockword (禁止ワード管理) - 新規追加
+# ----------------------------------------------------------------------
+
+# blockword コマンドグループを定義
+blockword_group = discord.app_commands.Group(name="blockword", description="サーバーの禁止ワードリストを管理します（管理者専用）")
+bot.tree.add_command(blockword_group)
+
+# ----------------------------------------------------------------------
+# サブコマンド: /blockword add (禁止ワード追加)
+# ----------------------------------------------------------------------
+@blockword_group.command(name="add", description="禁止ワードリストに新しい単語を追加します。")
+@discord.app_commands.describe(word="禁止したい単語（大文字小文字は区別されません）。")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def blockword_add_command(interaction: discord.Interaction, word: str):
+    global BANNED_WORDS
+    
+    # 小文字にして、前後の空白を削除
+    word_lower = word.lower().strip()
+    
+    if not word_lower:
+        await interaction.response.send_message("❌ 追加する禁止ワードを入力してください。", ephemeral=True)
+        return
+
+    if word_lower in BANNED_WORDS:
+        await interaction.response.send_message(f"⚠️ `{word}` はすでに禁止ワードリストに存在しています。", ephemeral=True)
+    else:
+        BANNED_WORDS.add(word_lower)
+        await interaction.response.send_message(
+            f"✅ 禁止ワードリストに `{word_lower}` を追加しました。\n現在のリスト件数: {len(BANNED_WORDS)}", 
+            ephemeral=True
+        )
+        await send_dm_log(f"**➕ 禁止ワード追加:** 管理者 {interaction.user.name} により `{word_lower}` が追加されました。")
+
+# ----------------------------------------------------------------------
+# サブコマンド: /blockword remove (禁止ワード削除)
+# ----------------------------------------------------------------------
+@blockword_group.command(name="remove", description="禁止ワードリストから単語を削除します。")
+@discord.app_commands.describe(word="削除したい禁止ワード。")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def blockword_remove_command(interaction: discord.Interaction, word: str):
+    global BANNED_WORDS
+    
+    # 小文字にして、前後の空白を削除
+    word_lower = word.lower().strip()
+
+    if word_lower in BANNED_WORDS:
+        BANNED_WORDS.remove(word_lower)
+        await interaction.response.send_message(
+            f"✅ 禁止ワードリストから `{word_lower}` を削除しました。\n現在のリスト件数: {len(BANNED_WORDS)}", 
+            ephemeral=True
+        )
+        await send_dm_log(f"**➖ 禁止ワード削除:** 管理者 {interaction.user.name} により `{word_lower}` が削除されました。")
+    else:
+        await interaction.response.send_message(f"⚠️ `{word}` は禁止ワードリストに存在しません。", ephemeral=True)
+
+# ----------------------------------------------------------------------
+# サブコマンド: /blockword list (禁止ワード表示)
+# ----------------------------------------------------------------------
+@blockword_group.command(name="list", description="現在の禁止ワードリストを表示します。")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def blockword_list_command(interaction: discord.Interaction):
+    
+    if not BANNED_WORDS:
+        await interaction.response.send_message("現在の禁止ワードリストは空です。", ephemeral=True)
+        return
+        
+    # リストをソートして表示用に整形
+    sorted_words = sorted(list(BANNED_WORDS))
+    
+    # 応答メッセージの作成
+    word_list_text = "\n".join([f"- `{word}`" for word in sorted_words])
+    
+    embed = discord.Embed(
+        title=f"🛑 現在の禁止ワードリスト ({len(BANNED_WORDS)} 件)",
+        description=word_list_text,
+        color=discord.Color.red()
+    )
+    embed.set_footer(text="Botが再起動されると、リストは初期設定値に戻ります。")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # ----------------------------------------------------------------------
