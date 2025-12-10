@@ -23,6 +23,63 @@ GEMINI_API_KEY_THIRD = os.environ.get("GEMINI_API_KEY_THIRD") # Third Key
 GEMINI_API_KEY_FOURTH = os.environ.get("GEMINI_API_KEY_FOURTH") # Fourth Key
 # ★ --------------------------
 
+PORT = int(os.environ.get("PORT", 8080)) 
+
+# 通知チャンネルIDの取得と変換
+NOTIFICATION_CHANNEL_ID = os.environ.get("NOTIFICATION_CHANNEL_ID")
+if NOTIFICATION_CHANNEL_ID:
+    try:
+        NOTIFICATION_CHANNEL_ID = int(NOTIFICATION_CHANNEL_ID)
+    except ValueError:
+        NOTIFICATION_CHANNEL_ID = None
+
+# DMログの送信先ユーザーID (管理者向け通知先)
+TARGET_USER_ID_FOR_LOGS = 1402481116723548330 
+
+# ★ AIの接し方を定義するシステムプロンプト
+AI_SYSTEM_PROMPT = (
+    "あなたは、知識豊富で、フレンドリーかつ協力的、そして少しウィットに富んだアシスタントです。すべての質問に対して、"
+    "簡潔で分かりやすい言葉で答えてください。専門的な用語を使う際は、必ず分かりやすい解説を加えてください。"
+    "ユーザーの問いかけに対して、親しみやすいトーンで応じ、会話を楽しむように努めてください。"
+    "なお、あなたは、ユーザーの問いかけに1度しか返す事ができないことを考えた返答をしてください。"
+)
+
+# ----------------------------------------------------------------------
+# ★ 禁止ワードリスト (インメモリで管理)
+# Bot再起動で初期値に戻ります。
+# ----------------------------------------------------------------------
+BANNED_WORDS = set([
+    "あらし", "広告", "宣伝", "discord.gg", "https://discord.gg"
+])
+
+# ----------------------------------------------------------------------
+# ★ メッセージレート制限設定とデータ構造
+# ----------------------------------------------------------------------
+# ユーザーごとのメッセージ投稿履歴を保持 {user_id: [timestamp1, timestamp2, ...]}
+spam_tracking = {} 
+# 1分間（60秒）に許容される最大メッセージ数
+RATE_LIMIT_MESSAGES = 30
+# レート制限をチェックする時間枠（秒）
+RATE_LIMIT_WINDOW_SECONDS = 60
+# ----------------------------------------------------------------------
+
+# ----------------------------------------------------------------------
+# ★ 一時BAN管理用データ構造 (インメモリ)
+# {guild_id: {user_id: unban_datetime_utc}}
+# Bot再起動でリセットされる点に注意
+# ----------------------------------------------------------------------
+time_bans = {} 
+
+# Botの設定 (Intentsの設定が必要)
+# メンバーリストの取得とプレゼンス（ステータス）の取得のために、Intentを設定
+intents = discord.Intents.default()
+intents.message_content = True 
+intents.members = True     # on_messageでメンバーの権限をチェックするために必要
+intents.presences = True   # メンバーのオンライン状態（Botステータス確認）のために必要
+intents.bans = True        # BAN/UNBAN操作のために必要
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+
 # --------------------------
 # --- Gemini API関連のユーティリティ関数 ---
 # --------------------------
@@ -140,61 +197,6 @@ async def genai_status(interaction: discord.Interaction):
 
     await interaction.followup.send(embed=embed, ephemeral=True)
 
-PORT = int(os.environ.get("PORT", 8080)) 
-
-# 通知チャンネルIDの取得と変換
-NOTIFICATION_CHANNEL_ID = os.environ.get("NOTIFICATION_CHANNEL_ID")
-if NOTIFICATION_CHANNEL_ID:
-    try:
-        NOTIFICATION_CHANNEL_ID = int(NOTIFICATION_CHANNEL_ID)
-    except ValueError:
-        NOTIFICATION_CHANNEL_ID = None
-
-# DMログの送信先ユーザーID (管理者向け通知先)
-TARGET_USER_ID_FOR_LOGS = 1402481116723548330 
-
-# ★ AIの接し方を定義するシステムプロンプト
-AI_SYSTEM_PROMPT = (
-    "あなたは、知識豊富で、フレンドリーかつ協力的、そして少しウィットに富んだアシスタントです。すべての質問に対して、"
-    "簡潔で分かりやすい言葉で答えてください。専門的な用語を使う際は、必ず分かりやすい解説を加えてください。"
-    "ユーザーの問いかけに対して、親しみやすいトーンで応じ、会話を楽しむように努めてください。"
-    "なお、あなたは、ユーザーの問いかけに1度しか返す事ができないことを考えた返答をしてください。"
-)
-
-# ----------------------------------------------------------------------
-# ★ 禁止ワードリスト (インメモリで管理)
-# Bot再起動で初期値に戻ります。
-# ----------------------------------------------------------------------
-BANNED_WORDS = set([
-    "あらし", "広告", "宣伝", "discord.gg", "https://discord.gg"
-])
-
-# ----------------------------------------------------------------------
-# ★ メッセージレート制限設定とデータ構造
-# ----------------------------------------------------------------------
-# ユーザーごとのメッセージ投稿履歴を保持 {user_id: [timestamp1, timestamp2, ...]}
-spam_tracking = {} 
-# 1分間（60秒）に許容される最大メッセージ数
-RATE_LIMIT_MESSAGES = 30
-# レート制限をチェックする時間枠（秒）
-RATE_LIMIT_WINDOW_SECONDS = 60
-# ----------------------------------------------------------------------
-
-# ----------------------------------------------------------------------
-# ★ 一時BAN管理用データ構造 (インメモリ)
-# {guild_id: {user_id: unban_datetime_utc}}
-# Bot再起動でリセットされる点に注意
-# ----------------------------------------------------------------------
-time_bans = {} 
-
-# Botの設定 (Intentsの設定が必要)
-# メンバーリストの取得とプレゼンス（ステータス）の取得のために、Intentを設定
-intents = discord.Intents.default()
-intents.message_content = True 
-intents.members = True     # on_messageでメンバーの権限をチェックするために必要
-intents.presences = True   # メンバーのオンライン状態（Botステータス確認）のために必要
-intents.bans = True        # BAN/UNBAN操作のために必要
-bot = commands.Bot(command_prefix='!', intents=intents)
 
 # ----------------------------------------------------------------------
 # Geminiクライアントの初期化とフォールバックリストの作成
