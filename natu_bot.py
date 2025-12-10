@@ -80,12 +80,7 @@ intents.bans = True        # BAN/UNBAN操作のために必要
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 
-# --------------------------
-# --- Gemini API関連のユーティリティ関数 ---
-# --------------------------
-
 # 利用可能なAPIキーのリスト
-# NOTE: このブロックは、既存の環境変数からキーを取得する部分の直後に追加することを推奨します。
 GEMINI_API_KEYS = [
     GEMINI_API_KEY_PRIMARY,
     GEMINI_API_KEY_SECONDARY,
@@ -101,6 +96,8 @@ def get_gemini_client(api_key: str) -> genai.Client:
 async def check_api_key_and_get_models(api_key: str) -> tuple[bool, Optional[list[str]]]:
     """
     APIキーの有効性をチェックし、有効な場合は利用可能なモデルのリストを取得する。
+    
+    NOTE: この関数はAPIキーが有効であるか（API呼び出しが可能か）をチェックするために利用します。
     """
     if not api_key:
         return False, None
@@ -113,21 +110,19 @@ async def check_api_key_and_get_models(api_key: str) -> tuple[bool, Optional[lis
     
     try:
         # list_modelsを非同期で実行
+        # 接続が成功し、有効なキーであることを確認する
         models_response = await loop.run_in_executor(
             None, # デフォルトのスレッドプールエグゼキュータを使用
             client.models.list
         )
         
-        # モデル名のみを抽出
+        # モデル名のみを抽出（ここでは使用しないが、成功の証拠として取得）
         model_names = [model.name for model in models_response]
         return True, model_names
         
     except APIError as e:
         # APIキーが無効、またはレートリミット超過などのエラーが発生した場合
         print(f"API Key Check Error: {e}")
-        # Invalid API key will often raise a 400 Bad Request or similar.
-        # It's difficult to distinguish a bad key from a quota error without inspecting the HTTP status code,
-        # but for simplicity, we treat any APIError during list_models as key check failure for this context.
         return False, None
     except Exception as e:
         # その他の予期せぬエラー
@@ -138,10 +133,9 @@ async def check_api_key_and_get_models(api_key: str) -> tuple[bool, Optional[lis
 # --- コマンド群: /genai コマンド ---
 # --------------------------
 
-# NOTE: このコマンドブロックは、既存の /ping コマンドの直後に追加することを推奨します。
-@bot.tree.command(name="genai", description="Gemini APIのステータスと利用可能なモデルリストを表示します。")
+@bot.tree.command(name="genai", description="Gemini APIキーの有効性を確認し、クォータの情報を表示します。")
 async def genai_status(interaction: discord.Interaction):
-    """Gemini APIのステータスと利用可能なモデルリストを表示します。"""
+    """Gemini APIキーの有効性、クォータに関する情報を表示します。"""
     
     await interaction.response.defer(ephemeral=True) # 時間がかかる可能性があるので遅延応答
 
@@ -161,42 +155,35 @@ async def genai_status(interaction: discord.Interaction):
 
     description = f"現在**{len(GEMINI_API_KEYS)}**個のキーが設定されています。\n\n"
     
-    # モデルリストを格納するセット (重複を避けるため)
-    all_available_models = set()
+    # API使用状況に関する注釈を追加
+    quota_note = (
+        "**【重要】残りの使用回数（クォータ）について:**\n"
+        "Gemini APIのSDKでは、現在の**残りの使用回数を直接取得することはできません。**\n"
+        "クォータの正確な情報は、Google AI StudioまたはGoogle Cloud Consoleの課金ダッシュボードでご確認ください。\n"
+        "以下のステータスは、APIキーが現在**有効であり、認証に成功しているか**を示しています。\n"
+        "レート制限に達した場合、Botはエラーを報告します。\n\n"
+    )
     
-    for i, (is_valid, model_list) in enumerate(results):
+    description += quota_note
+    
+    valid_key_count = 0
+    
+    for i, (is_valid, _) in enumerate(results): # モデルリストは使用しないため、_ で受け取る
         key_label = f"キー #{i + 1}"
         
-        if is_valid and model_list:
-            description += f"✅ **{key_label}**: **有効**です。利用可能なモデル数: `{len(model_list)}`\n"
-            for model_name in model_list:
-                all_available_models.add(model_name)
+        if is_valid:
+            description += f"✅ **{key_label}**: **有効** (APIに接続成功)\n"
+            valid_key_count += 1
         else:
-            description += f"❌ **{key_label}**: **無効**です。APIからの応答が得られませんでした。\n"
+            description += f"❌ **{key_label}**: **無効/認証失敗** (API接続エラー)\n"
             
     embed = discord.Embed(
         title="🤖 Gemini API 接続ステータス",
         description=description,
-        color=discord.Color.blue()
+        color=discord.Color.blue() if valid_key_count > 0 else discord.Color.red()
     )
 
-    if all_available_models:
-        # モデルリストを整形して表示 (最大20個に制限)
-        sorted_models = sorted(list(all_available_models))
-        model_display = "\n".join(sorted_models[:20])
-        
-        # 20個以上の場合は省略
-        if len(sorted_models) > 20:
-            model_display += f"\n...他 {len(sorted_models) - 20} 個のモデル"
-            
-        embed.add_field(
-            name=f"🌐 利用可能なユニークなモデル ({len(sorted_models)}種)",
-            value=f"```\n{model_display}\n```",
-            inline=False
-        )
-
     await interaction.followup.send(embed=embed, ephemeral=True)
-
 
 # ----------------------------------------------------------------------
 # Geminiクライアントの初期化とフォールバックリストの作成
