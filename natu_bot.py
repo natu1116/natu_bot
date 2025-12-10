@@ -23,6 +23,123 @@ GEMINI_API_KEY_THIRD = os.environ.get("GEMINI_API_KEY_THIRD") # Third Key
 GEMINI_API_KEY_FOURTH = os.environ.get("GEMINI_API_KEY_FOURTH") # Fourth Key
 # ★ --------------------------
 
+# --------------------------
+# --- Gemini API関連のユーティリティ関数 ---
+# --------------------------
+
+# 利用可能なAPIキーのリスト
+# NOTE: このブロックは、既存の環境変数からキーを取得する部分の直後に追加することを推奨します。
+GEMINI_API_KEYS = [
+    GEMINI_API_KEY_PRIMARY,
+    GEMINI_API_KEY_SECONDARY,
+    GEMINI_API_KEY_THIRD,
+    GEMINI_API_KEY_FOURTH,
+]
+GEMINI_API_KEYS = [key for key in GEMINI_API_KEYS if key] # Noneや空文字列を除外
+
+def get_gemini_client(api_key: str) -> genai.Client:
+    """指定されたAPIキーでGeminiクライアントを作成する"""
+    return genai.Client(api_key=api_key)
+
+async def check_api_key_and_get_models(api_key: str) -> tuple[bool, Optional[list[str]]]:
+    """
+    APIキーの有効性をチェックし、有効な場合は利用可能なモデルのリストを取得する。
+    """
+    if not api_key:
+        return False, None
+
+    client = get_gemini_client(api_key)
+    
+    # モデルリストの取得を非同期で実行するために、スレッドプールエグゼキュータを使用する
+    # Google GenAI SDKのlist_modelsは同期関数であるため
+    loop = asyncio.get_event_loop()
+    
+    try:
+        # list_modelsを非同期で実行
+        models_response = await loop.run_in_executor(
+            None, # デフォルトのスレッドプールエグゼキュータを使用
+            client.models.list
+        )
+        
+        # モデル名のみを抽出
+        model_names = [model.name for model in models_response]
+        return True, model_names
+        
+    except APIError as e:
+        # APIキーが無効、またはレートリミット超過などのエラーが発生した場合
+        print(f"API Key Check Error: {e}")
+        # Invalid API key will often raise a 400 Bad Request or similar.
+        # It's difficult to distinguish a bad key from a quota error without inspecting the HTTP status code,
+        # but for simplicity, we treat any APIError during list_models as key check failure for this context.
+        return False, None
+    except Exception as e:
+        # その他の予期せぬエラー
+        print(f"Unexpected Error during API Key Check: {e}")
+        return False, None
+
+# --------------------------
+# --- コマンド群: /genai コマンド ---
+# --------------------------
+
+# NOTE: このコマンドブロックは、既存の /ping コマンドの直後に追加することを推奨します。
+@bot.tree.command(name="genai", description="Gemini APIのステータスと利用可能なモデルリストを表示します。")
+async def genai_status(interaction: discord.Interaction):
+    """Gemini APIのステータスと利用可能なモデルリストを表示します。"""
+    
+    await interaction.response.defer(ephemeral=True) # 時間がかかる可能性があるので遅延応答
+
+    if not GEMINI_API_KEYS:
+        embed = discord.Embed(
+            title="Gemini APIステータス",
+            description="⚠️ Gemini APIキーが設定されていません。環境変数を確認してください。",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+
+    results = []
+    # すべてのキーに対して非同期でチェックを実行
+    tasks = [check_api_key_and_get_models(key) for key in GEMINI_API_KEYS]
+    results = await asyncio.gather(*tasks)
+
+    description = f"現在**{len(GEMINI_API_KEYS)}**個のキーが設定されています。\n\n"
+    
+    # モデルリストを格納するセット (重複を避けるため)
+    all_available_models = set()
+    
+    for i, (is_valid, model_list) in enumerate(results):
+        key_label = f"キー #{i + 1}"
+        
+        if is_valid and model_list:
+            description += f"✅ **{key_label}**: **有効**です。利用可能なモデル数: `{len(model_list)}`\n"
+            for model_name in model_list:
+                all_available_models.add(model_name)
+        else:
+            description += f"❌ **{key_label}**: **無効**です。APIからの応答が得られませんでした。\n"
+            
+    embed = discord.Embed(
+        title="🤖 Gemini API 接続ステータス",
+        description=description,
+        color=discord.Color.blue()
+    )
+
+    if all_available_models:
+        # モデルリストを整形して表示 (最大20個に制限)
+        sorted_models = sorted(list(all_available_models))
+        model_display = "\n".join(sorted_models[:20])
+        
+        # 20個以上の場合は省略
+        if len(sorted_models) > 20:
+            model_display += f"\n...他 {len(sorted_models) - 20} 個のモデル"
+            
+        embed.add_field(
+            name=f"🌐 利用可能なユニークなモデル ({len(sorted_models)}種)",
+            value=f"```\n{model_display}\n```",
+            inline=False
+        )
+
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 PORT = int(os.environ.get("PORT", 8080)) 
 
 # 通知チャンネルIDの取得と変換
