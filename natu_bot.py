@@ -13,15 +13,19 @@ from google import genai
 from google.genai.errors import APIError
 
 # ---------------------------
+# 監視対象チャンネル一覧
+# ---------------------------
+monitoring_channels = set()
+
+# ---------------------------
 # --- 環境設定 ---
 # ---------------------------
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 GEMINI_API_KEY_PRIMARY = os.environ.get("GEMINI_API_KEY") # Primary Key
 GEMINI_API_KEY_SECONDARY = os.environ.get("GEMINI_API_KEY_SECONDARY") # Secondary Key
-# ★ 新しく追加したキー
 GEMINI_API_KEY_THIRD = os.environ.get("GEMINI_API_KEY_THIRD") # Third Key
 GEMINI_API_KEY_FOURTH = os.environ.get("GEMINI_API_KEY_FOURTH") # Fourth Key
-# ★ --------------------------
+TARGET_USER_ID_FOR_LOGS = int(os.environ.get("TARGET_USER_ID_FOR_LOGS", 0))
 
 PORT = int(os.environ.get("PORT", 8080)) 
 
@@ -298,6 +302,54 @@ async def unban_user_after_delay(guild_id: int, user_id: int, delay_seconds: flo
     except Exception as e:
         print(f"FATAL ERROR: 自動BAN解除中に予期せぬエラーが発生しました: {e}")
 
+from discord import app_commands
+
+# ---------------------------
+# /monitoring コマンド群
+# ---------------------------
+
+@bot.tree.command(name="monitoring_add", description="このチャンネルを監視対象に追加します。")
+@app_commands.checks.has_permissions(administrator=True)
+async def monitoring_add(interaction: discord.Interaction):
+    channel_id = interaction.channel_id
+    monitoring_channels.add(channel_id)
+
+    await interaction.response.send_message(
+        f"👁‍🗨 このチャンネル（<#{channel_id}>）を **監視対象に追加**しました。",
+        ephemeral=False
+    )
+
+
+@bot.tree.command(name="monitoring_remove", description="このチャンネルを監視対象から外します。")
+@app_commands.checks.has_permissions(administrator=True)
+async def monitoring_remove(interaction: discord.Interaction):
+    channel_id = interaction.channel_id
+
+    if channel_id in monitoring_channels:
+        monitoring_channels.remove(channel_id)
+        msg = "🗑 このチャンネルを監視対象から削除しました。"
+    else:
+        msg = "⚠ このチャンネルは監視対象ではありません。"
+
+    await interaction.response.send_message(msg, ephemeral=False)
+
+
+@bot.tree.command(name="monitoring_send", description="このチャンネルに監視ログを送信します。")
+@app_commands.checks.has_permissions(administrator=True)
+async def monitoring_send(interaction: discord.Interaction):
+    channel = interaction.channel
+
+    await interaction.response.send_message(
+        f"📡 このチャンネル（{channel.mention}）に **監視ログを送信**します。",
+        ephemeral=False
+    )
+
+    embed = discord.Embed(
+        title="📡 監視ログ送信テスト",
+        description="このチャンネルは監視対象です。",
+        color=discord.Color.blue()
+    )
+    await channel.send(embed=embed)
 
 # ----------------------------------------------------------------------
 # Discordイベントとスラッシュコマンド
@@ -348,6 +400,56 @@ async def on_ready():
     await send_dm_log(dm_message, embed=embed)
         
     print('------')
+
+
+@bot.event
+async def on_message_delete(message: discord.Message):
+    if message.author.bot:
+        return
+    if message.guild is None:
+        return
+    if message.channel.id not in monitoring_channels:
+        return
+
+    embed = discord.Embed(
+        title="🗑 メッセージ削除",
+        description=f"**ユーザー:** {message.author.mention}\n"
+                    f"**チャンネル:** {message.channel.mention}",
+        color=discord.Color.red()
+    )
+    embed.add_field(name="内容", value=message.content or "（なし）", inline=False)
+    embed.timestamp = message.created_at
+
+    # 添付ファイル
+    if message.attachments:
+        files_text = "\n".join([att.url for att in message.attachments])
+        embed.add_field(name="添付ファイル", value=files_text, inline=False)
+
+    await message.channel.send(embed=embed)
+
+
+@bot.event
+async def on_message_edit(before: discord.Message, after: discord.Message):
+    if before.author.bot:
+        return
+    if before.guild is None:
+        return
+    if before.channel.id not in monitoring_channels:
+        return
+    if before.content == after.content:
+        return
+
+    embed = discord.Embed(
+        title="✏ メッセージ編集",
+        description=f"**ユーザー:** {before.author.mention}\n"
+                    f"**チャンネル:** {before.channel.mention}",
+        color=discord.Color.orange()
+    )
+    embed.add_field(name="編集前", value=before.content or "（なし）", inline=False)
+    embed.add_field(name="編集後", value=after.content or "（なし）", inline=False)
+    embed.timestamp = after.edited_at
+
+    await before.channel.send(embed=embed)
 
 # ----------------------------------------------------------------------
 # ★ メッセージレート制限と禁止ワードチェック (統合・修正済み)
