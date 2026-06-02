@@ -16,7 +16,7 @@ from google.genai.errors import APIError
 # 監視対象チャンネル一覧
 # ---------------------------
 monitoring_channels = set()
-
+monitoring_log_channel_id = None
 # ---------------------------
 # --- 環境設定 ---
 # ---------------------------
@@ -320,6 +320,7 @@ async def monitoring_add(interaction: discord.Interaction):
     )
 
 
+
 @bot.tree.command(name="monitoring_remove", description="このチャンネルを監視対象から外します。")
 @app_commands.checks.has_permissions(administrator=True)
 async def monitoring_remove(interaction: discord.Interaction):
@@ -334,22 +335,25 @@ async def monitoring_remove(interaction: discord.Interaction):
     await interaction.response.send_message(msg, ephemeral=False)
 
 
-@bot.tree.command(name="monitoring_send", description="このチャンネルに監視ログを送信します。")
+@bot.tree.command(name="monitoring_send", description="このチャンネルをログ送信先に設定します。")
 @app_commands.checks.has_permissions(administrator=True)
 async def monitoring_send(interaction: discord.Interaction):
-    channel = interaction.channel
+    global monitoring_log_channel_id
+    monitoring_log_channel_id = interaction.channel_id
 
     await interaction.response.send_message(
-        f"📡 このチャンネル（{channel.mention}）に **監視ログを送信**します。",
+        f"📡 このチャンネル（{interaction.channel.mention}）を **ログ送信先** に設定しました。",
         ephemeral=False
     )
 
+    # テスト用のログ送信（任意）
     embed = discord.Embed(
-        title="📡 監視ログ送信テスト",
-        description="このチャンネルは監視対象です。",
+        title="📡 ログ送信先設定",
+        description="このチャンネルがログ送信先として設定されました。",
         color=discord.Color.blue()
     )
-    await channel.send(embed=embed)
+    await interaction.channel.send(embed=embed)
+
 
 # ----------------------------------------------------------------------
 # Discordイベントとスラッシュコマンド
@@ -410,22 +414,23 @@ async def on_message_delete(message: discord.Message):
         return
     if message.channel.id not in monitoring_channels:
         return
+    if monitoring_log_channel_id is None:
+        return
+
+    log_channel = bot.get_channel(monitoring_log_channel_id)
+    if log_channel is None:
+        return
 
     embed = discord.Embed(
         title="🗑 メッセージ削除",
         description=f"**ユーザー:** {message.author.mention}\n"
-                    f"**チャンネル:** {message.channel.mention}",
+                    f"**元チャンネル:** {message.channel.mention}",
         color=discord.Color.red()
     )
     embed.add_field(name="内容", value=message.content or "（なし）", inline=False)
     embed.timestamp = message.created_at
 
-    # 添付ファイル
-    if message.attachments:
-        files_text = "\n".join([att.url for att in message.attachments])
-        embed.add_field(name="添付ファイル", value=files_text, inline=False)
-
-    await message.channel.send(embed=embed)
+    await log_channel.send(embed=embed)
 
 
 @bot.event
@@ -438,18 +443,24 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
         return
     if before.content == after.content:
         return
+    if monitoring_log_channel_id is None:
+        return
+
+    log_channel = bot.get_channel(monitoring_log_channel_id)
+    if log_channel is None:
+        return
 
     embed = discord.Embed(
         title="✏ メッセージ編集",
         description=f"**ユーザー:** {before.author.mention}\n"
-                    f"**チャンネル:** {before.channel.mention}",
+                    f"**元チャンネル:** {before.channel.mention}",
         color=discord.Color.orange()
     )
     embed.add_field(name="編集前", value=before.content or "（なし）", inline=False)
     embed.add_field(name="編集後", value=after.content or "（なし）", inline=False)
     embed.timestamp = after.edited_at
 
-    await before.channel.send(embed=embed)
+    await log_channel.send(embed=embed)
 
 # ----------------------------------------------------------------------
 # ★ メッセージレート制限と禁止ワードチェック (統合・修正済み)
