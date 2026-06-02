@@ -450,10 +450,16 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
     if log_channel is None:
         return
 
+    # メッセージリンク生成
+    message_link = f"https://discord.com/channels/{before.guild.id}/{before.channel.id}/{before.id}"
+
     embed = discord.Embed(
         title="✏ メッセージ編集",
-        description=f"**ユーザー:** {before.author.mention}\n"
-                    f"**元チャンネル:** {before.channel.mention}",
+        description=(
+            f"**ユーザー:** {before.author.mention}\n"
+            f"**元チャンネル:** {before.channel.mention}\n"
+            f"**[メッセージリンク]({message_link})**"
+        ),
         color=discord.Color.orange()
     )
     embed.add_field(name="編集前", value=before.content or "（なし）", inline=False)
@@ -461,6 +467,7 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
     embed.timestamp = after.edited_at
 
     await log_channel.send(embed=embed)
+
 
 # ----------------------------------------------------------------------
 # ★ メッセージレート制限と禁止ワードチェック (統合・修正済み)
