@@ -315,7 +315,7 @@ async def monitoring_add(interaction: discord.Interaction):
     monitoring_channels.add(channel_id)
 
     await interaction.response.send_message(
-        f"👁‍🗨 このチャンネル（<#{channel_id}>）を **監視対象に追加**しました。",
+        f"📷 このチャンネル（<#{channel_id}>）を **監視対象に追加**しました。",
         ephemeral=False
     )
 
